@@ -49,9 +49,6 @@ jobs:
 
       - name: Deploy to Edge Testing
         run: |
-          echo "🚀 Applying Kubernetes configuration..."
-          kubectl apply -k .k8s/overlays/edge-testing
-
           echo "🚀 Updating image to: ${{ env.IMAGE_REPO }}:${{ github.sha }}"
           kubectl set image deployment/researcher researcher=${{ env.IMAGE_REPO }}:${{ github.sha }} -n ${{ env.NAMESPACE }}
 
