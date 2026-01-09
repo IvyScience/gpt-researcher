@@ -47,15 +47,13 @@ jobs:
           kubectl config set-context edge --cluster=k8s --user=k8s-user
           kubectl config use-context edge
 
-      - name: Update Image Tag
-        run: |
-          # Use make set-tag to update kustomization.yaml
-          make set-tag env=edge-testing tag=${{ github.sha }}
-
       - name: Deploy to Edge Testing
         run: |
-          echo "🚀 Deploying to edge-testing..."
+          echo "🚀 Applying Kubernetes configuration..."
           kubectl apply -k .k8s/overlays/edge-testing
+
+          echo "🚀 Updating image to: ${{ env.IMAGE_REPO }}:${{ github.sha }}"
+          kubectl set image deployment/researcher researcher=${{ env.IMAGE_REPO }}:${{ github.sha }} -n ${{ env.NAMESPACE }}
 
           echo "⏳ Waiting for rollout to complete in namespace: ${{ env.NAMESPACE }}"
           kubectl rollout status deployment/researcher -n ${{ env.NAMESPACE }} --timeout=300s
