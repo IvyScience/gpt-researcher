@@ -182,10 +182,10 @@ The response should contain ONLY the list.
         if report_source == ReportSource.Web.value:
             reference_prompt = f"""
 You MUST write all used source urls at the end of the report as references, and make sure to not add duplicated sources, but only one reference for each.
-Every url should be hyperlinked: [url website](url)
+Every URL you cite MUST be a real source URL taken from the provided information (see the ALLOWED_SOURCES list if present). Do NOT invent domains.
 Additionally, you MUST include hyperlinks to the relevant URLs wherever they are referenced in the report:
 
-eg: Author, A. A. (Year, Month Date). Title of web page. Website Name. [url website](url)
+If you reference a source, hyperlink it using a real URL from the provided sources.
 """
         else:
             reference_prompt = f"""
@@ -207,10 +207,13 @@ Please follow all of the following guidelines in your report:
 - You MUST write the report with markdown syntax and {report_format} format.
 - Structure your report with clear markdown headers: use # for the main title, ## for major sections, and ### for subsections.
 - Use markdown tables when presenting structured data or comparisons to enhance readability.
+- Avoid repetitive phrasing (e.g., don't start every paragraph with "A study found..." or end every section with the same "reported X%..." cadence). Vary sentence structure by embedding numbers mid-sentence, using different subject constructions, and alternating between active/passive voice when appropriate.
 - You MUST prioritize the relevance, reliability, and significance of the sources you use. Choose trusted sources over less reliable ones.
 - You must also prioritize new articles over older articles if the source can be trusted.
 - You MUST NOT include a table of contents, but DO include proper markdown headers (# ## ###) to structure your report clearly.
-- Use in-text citation references in {report_format} format and make it with markdown hyperlink placed at the end of the sentence or paragraph that references them like this: ([in-text citation](url)).
+- Use in-text citations ONLY in this canonical form: **([Source](url))**.
+- The link label MUST be exactly "Source" (case-sensitive) to support downstream citation processing.
+- Only link to URLs that appear in the provided sources (do not fabricate new URLs). If you cannot cite a claim, omit it.
 - Don't forget to add a reference list at the end of the report in {report_format} format and full url links without hyperlinks.
 - {reference_prompt}
 - {tone_prompt}
@@ -381,7 +384,8 @@ Additional requirements:
 - You MUST determine your own concrete and valid opinion based on the given information. Do NOT defer to general and meaningless conclusions.
 - You MUST prioritize the relevance, reliability, and significance of the sources you use. Choose trusted sources over less reliable ones.
 - You must also prioritize new articles over older articles if the source can be trusted.
-- Use in-text citation references in {report_format} format and make it with markdown hyperlink placed at the end of the sentence or paragraph that references them like this: ([in-text citation](url)).
+- Use in-text citations ONLY in this canonical form: **([Source](url))** (placed at the end of the sentence/paragraph).
+- The link label MUST be exactly "Source" (case-sensitive). Do not use author/year/title as the link label.
 - {tone_prompt}
 - Write in {language}
 
@@ -508,6 +512,7 @@ IMPORTANT:Content and Sections Uniqueness:
 - Do not repeat any information already covered in the existing written contents or closely related variations to avoid duplicates.
 - If you have nested subsections, ensure they are unique and not covered in the existing written contents.
 - Ensure that your content is entirely new and does not overlap with any information already covered in the previous subtopic reports.
+- **Headers in different sections shouldn't overlap and keep concise**: Ensure your headers are distinct from headers in other sections and avoid redundancy.
 
 "Existing Subtopic Reports":
 - Existing subtopic reports and their section headers:
@@ -525,9 +530,12 @@ IMPORTANT:Content and Sections Uniqueness:
 
     ### Section Header
 
-    This is a sample text ([in-text citation](url)).
+    This is a sample text ([Source](https://example.org)).
 
 - Use H2 for the main subtopic header (##) and H3 for subsections (###).
+    - **Important**: Do NOT use H4 headers (####) or lower. Limit the hierarchy to H2 and H3 only.
+    - **Paragraphs**: Write in well-developed, full paragraphs. Avoid using bullet points unless absolutely necessary for listing specific data points or statistics.
+    - **Length**: Ensure each section is substantial (at least 3 paragraphs). Do not create headers for very short content.
 - Use smaller Markdown headers (e.g., H2 or H3) for content structure, avoiding the largest header (H1) as it will be used for the larger report's heading.
 - Organize your content into distinct sections that complement but do not overlap with existing reports.
 - When adding similar or identical subsections to your report, you should clearly indicate the differences between and the new content and the existing written content from previous subtopic reports. For example:
@@ -543,7 +551,7 @@ Assume the current date is {datetime.now(timezone.utc).strftime('%B %d, %Y')} if
 - You MUST write the report in the following language: {language}.
 - The focus MUST be on the main topic! You MUST Leave out any information un-related to it!
 - Must NOT have any introduction, conclusion, summary or reference section.
-- You MUST use in-text citation references in {report_format.upper()} format and make it with markdown hyperlink placed at the end of the sentence or paragraph that references them like this: ([in-text citation](url)).
+- You MUST use in-text citations in {report_format.upper()} format as markdown hyperlinks. NEVER use "in-text citation" as link text; use "Source" if author/year are unknown.
 - You MUST mention the difference between the existing content and the new content in the report if you are adding the similar or same subsections wherever necessary.
 - The report should have a minimum length of {total_words} words.
 - Use an {tone.value} tone throughout the report.
@@ -571,6 +579,8 @@ Using the latest information available, construct a draft section title headers 
 3. The header should't be too high level, but detailed enough to cover the main aspects of the subtopic.
 4. Use markdown syntax for the headers, using H3 (###) as H1 and H2 will be used for the larger report's heading.
 5. Ensure the headers cover main aspects of the subtopic.
+6. **Limit Granularity**: Do not create headers for very specific details. Group related information under broader H3 headers.
+7. **No H4**: Do NOT use H4 (####) or lower level headers.
 
 "Structure and Formatting":
 Provide the draft headers in a list format using markdown syntax, for example:
@@ -583,23 +593,122 @@ Provide the draft headers in a list format using markdown syntax, for example:
 - The focus MUST be on the main topic! You MUST Leave out any information un-related to it!
 - Must NOT have any introduction, conclusion, summary or reference section.
 - Focus solely on creating headers, not content.
+- Headers in different sections shouldn't overlap and keep concise.
 """
 
     @staticmethod
-    def generate_report_introduction(question: str, research_summary: str = "", language: str = "english", report_format: str = "apa") -> str:
+    def generate_reorganize_subtopics_prompt(
+        main_topic: str,
+        research_context: str,
+        subtopics_with_headers: str
+    ) -> str:
+        """
+        Generate a prompt for reorganizing subtopics and headers into a logical structure.
+        This directly generates the final subtopics list that the writer will use.
+        This requires logical reasoning and should use a high-quality model.
+        
+        Args:
+            main_topic: The main research topic
+            research_context: Combined research context
+            subtopics_with_headers: Formatted string of subtopics with their headers
+            
+        Returns:
+            str: The reorganization prompt
+        """
+        return f"""
+You are an expert academic editor reorganizing a literature review report.
+
+Main Topic: {main_topic}
+
+Research Context:
+{research_context}
+
+Current Subtopics with Headers:
+{subtopics_with_headers}
+
+Your task is to reorganize these subtopics and their headers into a logical structure for the final report.
+
+Guidelines:
+1. **Logical ordering**: Ensure subtopics follow a logical flow (e.g., Input → Process → Output, or Broad → Specific)
+2. **Merge related concepts**: If multiple subtopics cover similar themes, merge them into one subtopic with combined headers
+3. **Avoid fragmentation**: Group related concepts together instead of scattering them
+4. **Separate mechanisms from moderators**: Keep mediators (mechanisms) separate from moderators (boundary conditions)
+5. **Save implications for end**: Move any "implications", "applications", or "future directions" to later subtopics
+6. **Headers in different subtopics shouldn't overlap and keep concise**: Ensure headers across different subtopics are distinct and non-overlapping. Avoid redundant or similar headers.
+7. **Refine headers**: If merging subtopics, combine and refine their headers to avoid duplication
+
+Output format (JSON):
+{{
+  "reorganized_subtopics": [
+    {{
+      "task": "Final subtopic task (may be merged or refined)",
+      "headers": [
+        {{"text": "Header 1", "level": 3}},
+        {{"text": "Header 2", "level": 3}}
+      ],
+      "order": 1
+    }}
+  ]
+}}
+
+Important:
+- Return ONLY the final subtopics list that the writer will use
+- Each subtopic should have a clear "task" and a list of "headers"
+- Headers should be in the format: {{"text": "Header text", "level": 3}}
+- Order subtopics logically
+- If merging, combine headers and remove duplicates
+"""
+
+    @staticmethod
+    def generate_research_gap_prompt(
+        question: str,
+        context: str,
+        total_words=500,
+        language: str = "english"
+    ) -> str:
+        """
+        Generates a prompt to identify research gaps based on the research context.
+        """
+        return f"""
+"{context}"
+
+Using the above research information, identify and analyze the key research gaps related to the topic: "{question}".
+
+Your task is to write a "## Research Gap" section for the final report.
+
+The section should:
+1.  Clearly identify 1-2 distinct areas where the current literature/information is missing, contradictory, or under-explored.
+2.  Explain WHY these gaps are significant.
+3.  Be specific to the provided context—do not invent generic gaps.
+4.  If the context is very comprehensive, focus on future implications or emerging trends that are not yet fully understood.
+5.  Be approximately {total_words} words.
+6.  Use proper markdown formatting.
+7.  Write in {language}.
+
+Return ONLY the markdown section content.
+"""
+
+    @staticmethod
+    def generate_report_introduction(question: str, research_summary: str = "", language: str = "english", report_format: str = "apa", research_gap: str = "") -> str:
+        gap_instruction = ""
+        if research_gap:
+            gap_instruction = f"Briefly mention the following identified research gap to highlight the report's value/motivation: {research_gap}\n"
+
         return f"""{research_summary}\n
 Using the above latest information, Prepare a detailed report introduction on the topic -- {question}.
 - The introduction should be succinct, well-structured, informative with markdown syntax.
 - As this introduction will be part of a larger report, do NOT include any other sections, which are generally present in a report.
 - The introduction should be preceded by an H1 heading with a suitable topic for the entire report.
-- You must use in-text citation references in {report_format.upper()} format and make it with markdown hyperlink placed at the end of the sentence or paragraph that references them like this: ([in-text citation](url)).
+{gap_instruction}- You must use in-text citations in {report_format.upper()} format as markdown hyperlinks. 
+- Use in-text citations ONLY in this canonical form: **([Source](url))**.
+- The link label MUST be exactly "Source" (case-sensitive) to support downstream citation processing.
 Assume that the current date is {datetime.now(timezone.utc).strftime('%B %d, %Y')} if required.
 - The output must be in {language} language.
 """
 
 
     @staticmethod
-    def generate_report_conclusion(query: str, report_content: str, language: str = "english", report_format: str = "apa") -> str:
+    def generate_report_conclusion(query: str, report_content: str, language: str = "english", report_format: str = "apa", research_gap: str = "") -> str:
         """
         Generate a concise conclusion summarizing the main findings and implications of a research report.
 
@@ -607,10 +716,15 @@ Assume that the current date is {datetime.now(timezone.utc).strftime('%B %d, %Y'
             query (str): The research task or question.
             report_content (str): The content of the research report.
             language (str): The language in which the conclusion should be written.
+            research_gap (str): Identified research gap to reference.
 
         Returns:
             str: A concise conclusion summarizing the report's main findings and implications.
         """
+        gap_instruction = ""
+        if research_gap:
+            gap_instruction = f"Briefly call back to the identified research gap: {research_gap} to show how the findings address it.\n"
+
         prompt = f"""
     Based on the research report below and research task, please write a concise conclusion that summarizes the main findings and their implications:
 
@@ -622,10 +736,14 @@ Assume that the current date is {datetime.now(timezone.utc).strftime('%B %d, %Y'
     1. Recap the main points of the research
     2. Highlight the most important findings
     3. Discuss any implications or next steps
-    4. Be approximately 2-3 paragraphs long
+    4. {gap_instruction}
+    5. Be approximately 2-3 paragraphs long
 
     If there is no "## Conclusion" section title written at the end of the report, please add it to the top of your conclusion.
-    You must use in-text citation references in {report_format.upper()} format and make it with markdown hyperlink placed at the end of the sentence or paragraph that references them like this: ([in-text citation](url)).
+    You must use in-text citations in {report_format.upper()} format as markdown hyperlinks. 
+
+    Use in-text citations ONLY in this canonical form: **([Source](url))**.
+    The link label MUST be exactly "Source" (case-sensitive) to support downstream citation processing.
 
     IMPORTANT: The entire conclusion MUST be written in {language} language.
 

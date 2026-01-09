@@ -141,7 +141,20 @@ class GPTResearcher:
         self.verbose = verbose
         self.context = context or []
         self.headers = headers or {}
+        
+        # Overwrite config attributes from headers if they exist
+        # This allows per-request configuration (e.g. LANGUAGE, REPORT_FORMAT)
+        for key, value in self.headers.items():
+            if hasattr(self.cfg, key.lower()):
+                setattr(self.cfg, key.lower(), value)
+
         self.research_costs = 0.0
+        # Token usage tracking
+        self.token_usage = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+        }
         self.log_handler = log_handler
         self.prompt_family = get_prompt_family(prompt_family or self.cfg.prompt_family, self.cfg)
         
@@ -388,17 +401,23 @@ class GPTResearcher:
         })
         return report
 
-    async def write_report_conclusion(self, report_body: str) -> str:
+    async def write_report_conclusion(self, report_body: str, research_gap: str = "") -> str:
         await self._log_event("research", step="writing_conclusion")
-        conclusion = await self.report_generator.write_report_conclusion(report_body)
+        conclusion = await self.report_generator.write_report_conclusion(report_body, research_gap)
         await self._log_event("research", step="conclusion_completed")
         return conclusion
 
-    async def write_introduction(self):
+    async def write_introduction(self, research_gap: str = ""):
         await self._log_event("research", step="writing_introduction")
-        intro = await self.report_generator.write_introduction()
+        intro = await self.report_generator.write_introduction(research_gap)
         await self._log_event("research", step="introduction_completed")
         return intro
+
+    async def write_research_gap(self):
+        await self._log_event("research", step="writing_research_gap")
+        gap = await self.report_generator.write_research_gap()
+        await self._log_event("research", step="research_gap_completed")
+        return gap
 
     async def quick_search(self, query: str, query_domains: list[str] = None) -> list[Any]:
         return await get_search_results(query, self.retrievers[0], query_domains=query_domains)
@@ -457,10 +476,38 @@ class GPTResearcher:
     def get_costs(self) -> float:
         return self.research_costs
 
+    def get_token_usage(self) -> dict:
+        """Get token usage statistics."""
+        return self.token_usage.copy()
+
+    def add_token_usage(self, prompt_tokens: int = 0, completion_tokens: int = 0) -> None:
+        """Add token usage to the total."""
+        self.token_usage["prompt_tokens"] += prompt_tokens
+        self.token_usage["completion_tokens"] += completion_tokens
+        self.token_usage["total_tokens"] = (
+            self.token_usage["prompt_tokens"] + self.token_usage["completion_tokens"]
+        )
+        # Log token usage update to JSON handler
+        if self.log_handler:
+            # We need to use create_task because _log_event is async and add_token_usage is sync
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._log_event("research", step="token_usage_update", details={
+                    "added_prompt_tokens": prompt_tokens,
+                    "added_completion_tokens": completion_tokens,
+                    "total_prompt_tokens": self.token_usage["prompt_tokens"],
+                    "total_completion_tokens": self.token_usage["completion_tokens"],
+                    "total_tokens": self.token_usage["total_tokens"]
+                }))
+            except RuntimeError:
+                # In case there is no running loop (e.g. strict sync context), we verify if we can just skip or warn
+                pass
+
     def set_verbose(self, verbose: bool):
         self.verbose = verbose
 
-    def add_costs(self, cost: float) -> None:
+    def add_costs(self, cost: float, **kwargs) -> None:
         if not isinstance(cost, (float, int)):
             raise ValueError("Cost must be an integer or float")
         self.research_costs += cost
@@ -469,3 +516,13 @@ class GPTResearcher:
                 "cost": cost,
                 "total_cost": self.research_costs
             })
+            
+        # Check for token usage in kwargs to update metrics without relying on reflection
+        if "token_usage" in kwargs:
+            usage = kwargs["token_usage"]
+            if isinstance(usage, dict):
+                self.add_token_usage(
+                    prompt_tokens=usage.get("prompt_tokens", 0),
+                    completion_tokens=usage.get("completion_tokens", 0)
+                )
+

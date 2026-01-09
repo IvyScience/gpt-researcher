@@ -12,6 +12,12 @@ from .serper.serper import SerperSearch
 from .tavily.tavily_search import TavilySearch
 from .exa.exa import ExaSearch
 from .mcp import MCPRetriever
+from .internal_biblio.internal_biblio import (
+    InternalBiblioRetriever,
+    InternalHighlightRetriever,
+    InternalFileRetriever
+)
+from .noteexpress.noteexpress import NoteExpressRetriever
 
 __all__ = [
     "TavilySearch",
@@ -27,5 +33,9 @@ __all__ = [
     "SemanticScholarSearch",
     "PubMedCentralSearch",
     "ExaSearch",
-    "MCPRetriever"
+    "MCPRetriever",
+    "InternalBiblioRetriever",
+    "InternalHighlightRetriever",
+    "InternalFileRetriever",
+    "NoteExpressRetriever"
 ]

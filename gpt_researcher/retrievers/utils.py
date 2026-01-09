@@ -68,6 +68,10 @@ VALID_RETRIEVERS = [
     "pubmed_central",
     "exa",
     "mcp",
+    "internal_biblio",
+    "internal_highlight",
+    "internal_file",
+    "noteexpress",
     "mock"
 ]
 

@@ -1,14 +1,44 @@
 services:
+  # FastAPI API server (handles requests directly with Uvicorn)
   gpt-researcher:
     pull_policy: build
     image: gptresearcher/gpt-researcher
     build: ./
-    environment: 
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+    env_file:
+      - .env
+    environment:
+      # Azure OpenAI 配置（基础配置，部署特定的配置通过 env_file 从 .env 加载）
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
+      # 通用 API 版本（如果所有部署使用相同版本）
+      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-}
+      # 部署特定的配置（从 .env 文件自动加载）：
+      # - AZURE_OPENAI_ENDPOINT_gpt_5_2_chat
+      # - AZURE_OPENAI_API_KEY_gpt_5_2_chat
+      # - AZURE_OPENAI_API_VERSION_gpt_5_2_chat
+      # - AZURE_OPENAI_API_VERSION_gpt_4o
+      # - AZURE_OPENAI_API_VERSION_gpt_4o_mini
+      # - AZURE_OPENAI_API_VERSION_text_embedding_3_large
+      # 注意：部署名称中的连字符会被替换为下划线
+      # LLM 模型配置
+      FAST_LLM: ${FAST_LLM:-azure_openai:gpt-4o-mini}
+      SMART_LLM: ${SMART_LLM:-azure_openai:gpt-4o}
+      LOGICAL_LLM: ${LOGICAL_LLM:-} # Optional: Use a more powerful model for logical reasoning (e.g., "azure_openai:gpt-5.2"). If empty, falls back to SMART_LLM.
+      EMBEDDING: ${EMBEDDING:-azure_openai:text-embedding-3-large}
+      # 其他配置（保留原有配置作为备选）
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       TAVILY_API_KEY: ${TAVILY_API_KEY}
       LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}
       LOGGING_LEVEL: INFO
+      # Retriever 配置（可选，如果不设置则使用默认值）
+      # 默认值: internal_biblio,internal_highlight,internal_file,noteexpress,tavily
+      DEFAULT_RETRIEVERS: ${DEFAULT_RETRIEVERS:-internal_biblio,internal_highlight,internal_file,noteexpress,tavily}
+      # Internal API 配置（从 .env 文件读取）
+      INTERNAL_API_BASE_URL: ${INTERNAL_API_BASE_URL:-https://www.ivysci.com/api/v2}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      # Uvicorn workers (控制并发数)
+      WORKERS: ${WORKERS:-1}
     volumes:
       - ${PWD}/my-docs:/usr/src/app/my-docs:rw
       - ${PWD}/outputs:/usr/src/app/outputs:rw
@@ -17,16 +47,21 @@ services:
     restart: always
     ports:
       - 8000:8000
-      
+    command: uvicorn backend.server.app:app --host 0.0.0.0 --port 8000 --workers ${WORKERS:-1}
+
   gptr-nextjs:
     pull_policy: build
     image: gptresearcher/gptr-nextjs
     stdin_open: true
+    depends_on:
+      - gpt-researcher
     environment:
       CHOKIDAR_USEPOLLING: "true"
       LOGGING_LEVEL: INFO
       NEXT_PUBLIC_GA_MEASUREMENT_ID: ${NEXT_PUBLIC_GA_MEASUREMENT_ID}
-      NEXT_PUBLIC_GPTR_API_URL: ${NEXT_PUBLIC_GPTR_API_URL}
+      # 在 Docker 容器中，Next.js API 路由（服务端）需要使用服务名称访问后端
+      # 客户端（浏览器）可以使用 localhost:8000，但服务端必须使用服务名
+      NEXT_PUBLIC_GPTR_API_URL: ${NEXT_PUBLIC_GPTR_API_URL:-http://gpt-researcher:8000}
     build:
       dockerfile: Dockerfile.dev
       context: frontend/nextjs
@@ -42,7 +77,7 @@ services:
   gpt-researcher-tests:
     image: gptresearcher/gpt-researcher-tests
     build: ./
-    environment: 
+    environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL}
       TAVILY_API_KEY: ${TAVILY_API_KEY}
@@ -55,18 +90,18 @@ services:
       python -m pytest tests/report-types.py &&
       python -m pytest tests/vector-store.py
       "
-  
-  discord-bot:
-    build:
-      context: ./docs/discord-bot
-      dockerfile: Dockerfile.dev
-    environment:
-      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
-      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
-    volumes:
-      - ./docs/discord-bot:/app
-      - /app/node_modules
-    ports:
-      - 3001:3000
-    profiles: ["discord"]
-    restart: always
+
+  # discord-bot:
+  #   build:
+  #     context: ./docs/discord-bot
+  #     dockerfile: Dockerfile.dev
+  #   environment:
+  #     - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+  #     - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
+  #   volumes:
+  #     - ./docs/discord-bot:/app
+  #     - /app/node_modules
+  #   ports:
+  #     - 3001:3000
+  #   profiles: ["discord"]
+  #   restart: always
