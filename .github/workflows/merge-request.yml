@@ -1,8 +1,9 @@
 name: Merge Request Deploy
 run-name: ${{ github.actor }} - Merge Request Deploy (Edge Testing)
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - master
   workflow_dispatch:
 
 env:
@@ -55,10 +56,10 @@ jobs:
         run: |
           echo "🚀 Deploying to edge-testing..."
           kubectl apply -k .k8s/overlays/edge-testing
-          
+
           echo "⏳ Waiting for rollout to complete in namespace: ${{ env.NAMESPACE }}"
           kubectl rollout status deployment/researcher -n ${{ env.NAMESPACE }} --timeout=300s
-          
+
           echo "✅ Rollout completed successfully!"
           echo "=== Deployment Status ==="
           kubectl get deployments -n ${{ env.NAMESPACE }} -l app=researcher

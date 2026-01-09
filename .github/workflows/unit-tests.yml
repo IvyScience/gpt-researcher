@@ -30,5 +30,6 @@ jobs:
 
       - name: Run Unit Tests (Mocked)
         run: |
+          touch .env
           # Override the default command to run only unit tests which are mocked and don't require API keys
           docker-compose --profile test run --rm gpt-researcher-tests bash -c "pip install pytest pytest-asyncio && python -m pytest tests/unit"
