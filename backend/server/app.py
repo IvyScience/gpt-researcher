@@ -15,7 +15,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, File, Uplo
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict
 
 # Add the parent directory to sys.path to make sure we can import from server
@@ -23,8 +23,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from server.websocket_manager import WebSocketManager
 from server.server_utils import (
-    get_config_dict, sanitize_filename,
-    update_environment_variables, handle_file_upload, handle_file_deletion,
+    handle_file_upload, handle_file_deletion,
     execute_multi_agents, handle_websocket_communication
 )
 from server.server_utils import CustomLogsHandler
@@ -35,11 +34,14 @@ from gpt_researcher.utils.enum import Tone
 from chat.chat import ChatAgentWithMemory
 
 # Output file controls
+
+
 def _env_bool(name: str, default: bool) -> bool:
     val = os.getenv(name)
     if val is None:
         return default
     return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
+
 
 # Default behavior: keep markdown for processing and PDF for preview; skip DOCX unless explicitly enabled.
 SAVE_MD = _env_bool("OUTPUT_SAVE_MD", True)
@@ -67,15 +69,13 @@ class ResearchRequest(BaseModel):
     tone: str
     headers: dict | None = None
     user_id: int | None = None  # User ID (can also be in headers)
-    research_id: str | None = None # Unique ID for the research request
+    research_id: str | None = None  # Unique ID for the research request
     language: str | None = None  # Language for the report
-    project_id: str | None = None  # Project ID to pass through to webhook
-    # Webhook URL is configured via environment variable WEBHOOK_URL, not passed in request
 
 
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="allow")  # Allow extra fields in the request
-    
+
     report: str
     messages: List[Dict[str, Any]]
 
@@ -85,13 +85,13 @@ async def lifespan(app: FastAPI):
     # Startup
     os.makedirs("outputs", exist_ok=True)
     app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
-    
+
     # Mount frontend static files
     frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend")
     if os.path.exists(frontend_path):
         app.mount("/site", StaticFiles(directory=frontend_path), name="frontend")
         logger.debug(f"Frontend mounted from: {frontend_path}")
-        
+
         # Also mount the static directory directly for assets referenced as /static/
         static_path = os.path.join(frontend_path, "static")
         if os.path.exists(static_path):
@@ -99,7 +99,7 @@ async def lifespan(app: FastAPI):
             logger.debug(f"Static assets mounted from: {static_path}")
     else:
         logger.warning(f"Frontend directory not found: {frontend_path}")
-    
+
     logger.info("GPT Researcher API ready - local mode (no database persistence)")
     yield
     # Shutdown
@@ -155,14 +155,15 @@ async def serve_frontend():
     """Serve the main frontend HTML page."""
     frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend"))
     index_path = os.path.join(frontend_dir, "index.html")
-    
+
     if not os.path.exists(index_path):
         raise HTTPException(status_code=404, detail="Frontend index.html not found")
-    
+
     with open(index_path, "r", encoding="utf-8") as f:
         content = f.read()
-    
+
     return HTMLResponse(content=content)
+
 
 @app.get("/report/{research_id}")
 async def read_report(request: Request, research_id: str):
@@ -200,7 +201,8 @@ async def create_or_update_report(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def write_report(research_request: ResearchRequest, research_id: str = None, logs_handler: CustomLogsHandler | None = None):
+async def write_report(research_request: ResearchRequest, research_id: str = None,
+                       logs_handler: CustomLogsHandler | None = None):
     try:
         # Determine user_id early so we can include it in webhook notifications as well
         user_id: int | None = None
@@ -212,11 +214,6 @@ async def write_report(research_request: ResearchRequest, research_id: str = Non
                 user_id = int(header_user_id) if header_user_id is not None else None
             except (TypeError, ValueError):
                 user_id = None
-        
-        # Determine project_id
-        project_id: str | None = None
-        if hasattr(research_request, "project_id") and research_request.project_id:
-            project_id = research_request.project_id
 
         # Inject language into headers if provided
         if hasattr(research_request, "language") and research_request.language:
@@ -246,7 +243,6 @@ async def write_report(research_request: ResearchRequest, research_id: str = Non
             response = {
                 "research_id": research_id,
                 "user_id": user_id,
-                "project_id": project_id,
                 "research_information": {
                     "source_urls": researcher.get_source_urls(),
                     "research_costs": researcher.get_costs(),
@@ -265,7 +261,6 @@ async def write_report(research_request: ResearchRequest, research_id: str = Non
             response = {
                 "research_id": research_id,
                 "user_id": user_id,
-                "project_id": project_id,
                 "research_information": {
                     "source_urls": [],
                     "research_costs": 0.0,
@@ -302,8 +297,6 @@ async def write_report(research_request: ResearchRequest, research_id: str = Non
         # Send webhook notification (if configured in environment)
         await send_webhook_notification(
             research_id=research_id,
-            user_id=user_id,
-            project_id=project_id,
             status="completed",
             response=response
         )
@@ -313,8 +306,6 @@ async def write_report(research_request: ResearchRequest, research_id: str = Non
         # Send error webhook (if configured in environment)
         await send_webhook_notification(
             research_id=research_id,
-            user_id=research_request.user_id if hasattr(research_request, "user_id") else None,
-            project_id=research_request.project_id if hasattr(research_request, "project_id") else None,
             status="failed",
             error=str(e)
         )
@@ -323,21 +314,19 @@ async def write_report(research_request: ResearchRequest, research_id: str = Non
 
 async def send_webhook_notification(
     research_id: str,
-    user_id: int | None,
-    project_id: str | None,
     status: str,
     response: Dict[str, Any] = None,
     error: str = None
 ):
     """
     Send webhook notification when report generation is complete or failed.
-    
+
     Webhook URL and API key are read from environment variables:
     - WEBHOOK_URL: The webhook URL to send notification to
     - WEBHOOK_API_KEY: The API key for authentication (optional)
-    
+
     If WEBHOOK_URL is not configured, this function does nothing.
-    
+
     Args:
         research_id: The research ID
         status: "completed" or "failed"
@@ -349,20 +338,17 @@ async def send_webhook_notification(
     if not webhook_url:
         # Webhook not configured, skip notification
         return
-    
+
     try:
         # Normalize timestamps and payload types to satisfy strict webhook schemas
         timestamp = int(time.time())
 
         payload = {
             "research_id": research_id,
-            "research_id": research_id,
-            "user_id": user_id,
-            "project_id": project_id,
             "status": status,
             "timestamp": timestamp
         }
-        
+
         if status == "completed" and response:
             research_information = response.get("research_information") or {}
             if not isinstance(research_information, dict):
@@ -435,7 +421,7 @@ async def send_webhook_notification(
             logger.info(f"Webhook outgoing payload (report truncated): {json.dumps(log_payload, ensure_ascii=False)}")
         except Exception as e:
             logger.warning(f"Failed to log webhook payload preview: {e}")
-        
+
         # Prepare request headers with API key if configured
         headers = {}
         webhook_api_key = os.getenv("WEBHOOK_API_KEY")
@@ -446,7 +432,7 @@ async def send_webhook_notification(
         webhook_host_header = os.getenv("WEBHOOK_HOST_HEADER")
         if webhook_host_header:
             headers["Host"] = webhook_host_header
-        
+
         async with httpx.AsyncClient(timeout=10.0) as client:
             result = await client.post(webhook_url, json=payload, headers=headers)
             try:
@@ -467,6 +453,7 @@ async def send_webhook_notification(
     except Exception as e:
         logger.error(f"Failed to send webhook notification to {webhook_url}: {e}")
 
+
 @app.post("/report/")
 async def generate_report(
     research_request: ResearchRequest,
@@ -474,13 +461,13 @@ async def generate_report(
 ):
     """
     Submit a report generation task.
-    
+
     This endpoint immediately returns a task_id and processes the report in the background.
     When complete, a webhook notification will be sent if WEBHOOK_URL is configured in environment.
     """
     from server.server_utils import sanitize_filename
     import re
-    
+
     if research_request.research_id:
         # Basic sanitization for custom ID: allow alphanumeric, underscores, and dashes
         research_id = re.sub(r"[^a-zA-Z0-9_\-]", "", research_request.research_id)
@@ -497,14 +484,14 @@ async def generate_report(
         await logs_handler.send_json({"query": research_request.task})
     except Exception as e:
         logger.warning(f"Failed to initialize JSON log file: {e}")
-    
+
     # Prepare headers
     headers = research_request.headers or {}
-    
+
     # Ensure user_id is in headers if provided in request
     if hasattr(research_request, 'user_id') and research_request.user_id:
         headers["user_id"] = research_request.user_id
-    
+
     # If no retriever specified, use default from environment or config
     if "retriever" not in headers and "retrievers" not in headers:
         # Check environment variable first
@@ -514,13 +501,13 @@ async def generate_report(
         else:
             # Fall back to default retrievers: internal_biblio, internal_highlight, internal_file, noteexpress, tavily
             headers["retrievers"] = "internal_biblio,internal_highlight,internal_file,noteexpress,tavily"
-    
+
     # Update request headers
     research_request.headers = headers
-    
+
     # Add background task to generate report
     background_tasks.add_task(write_report, research_request, research_id, logs_handler)
-    
+
     # Return immediately with task_id
     return {
         "message": "Report generation task has been submitted.",
@@ -568,6 +555,7 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"Unexpected WebSocket error: {str(e)}")
         await manager.disconnect(websocket)
 
+
 @app.post("/api/chat")
 async def chat(chat_request: ChatRequest):
     """Process a chat request with a report and message history.
@@ -592,7 +580,7 @@ async def chat(chat_request: ChatRequest):
         response_content, tool_calls_metadata = await chat_agent.chat(chat_request.messages, None)
         logger.info(f"response_content: {response_content}")
         logger.info(f"Got chat response of length: {len(response_content) if response_content else 0}")
-        
+
         if tool_calls_metadata:
             logger.info(f"Tool calls used: {json.dumps(tool_calls_metadata)}")
 
@@ -612,6 +600,7 @@ async def chat(chat_request: ChatRequest):
         logger.error(f"Error processing chat request: {str(e)}", exc_info=True)
         return {"error": str(e)}
 
+
 @app.post("/api/reports/{research_id}/chat")
 async def research_report_chat(research_id: str, request: Request):
     """Handle chat requests for a specific research report.
@@ -620,7 +609,7 @@ async def research_report_chat(research_id: str, request: Request):
     try:
         # Get raw JSON data from request
         data = await request.json()
-        
+
         # Create chat agent with the report
         chat_agent = ChatAgentWithMemory(
             report=data.get("report", ""),
@@ -630,7 +619,7 @@ async def research_report_chat(research_id: str, request: Request):
 
         # Process the chat and get response with metadata
         response_content, tool_calls_metadata = await chat_agent.chat(data.get("messages", []), None)
-        
+
         if tool_calls_metadata:
             logger.info(f"Tool calls used: {json.dumps(tool_calls_metadata)}")
 
@@ -649,11 +638,13 @@ async def research_report_chat(research_id: str, request: Request):
         logger.error(f"Error in research report chat: {str(e)}", exc_info=True)
         return {"error": str(e)}
 
+
 @app.put("/api/reports/{research_id}")
 async def update_report(research_id: str, request: Request):
     """Update a specific research report by ID - no database configured."""
     logger.debug(f"Update requested for report {research_id} - no database configured, not persisted")
     return {"success": True, "id": research_id}
+
 
 @app.delete("/api/reports/{research_id}")
 async def delete_report(research_id: str):

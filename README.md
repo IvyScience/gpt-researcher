@@ -21,7 +21,7 @@
 
 # 🔎 GPT Researcher
 
-**GPT Researcher is an open deep research agent designed for both web and local research on any given task.** 
+**GPT Researcher is an open deep research agent designed for both web and local research on any given task.**
 
 The agent produces detailed, factual, and unbiased research reports with citations. GPT Researcher provides a full suite of customization options to create tailor made and domain specific research agents. Inspired by the recent [Plan-and-Solve](https://arxiv.org/abs/2305.04091) and [RAG](https://arxiv.org/abs/2005.11401) papers, GPT Researcher addresses misinformation, speed, determinism, and reliability by offering stable performance and increased speed through parallelized agent work.
 
@@ -100,7 +100,7 @@ See the [Documentation](https://docs.gptr.dev/docs/gpt-researcher/getting-starte
     ```
 
     For custom OpenAI-compatible APIs (e.g., local models, other providers), you can also set:
-    
+
     ```bash
     export OPENAI_BASE_URL={Your custom API base URL here}
     ```
@@ -152,7 +152,7 @@ import os
 async def mcp_research_example():
     # Enable MCP with web search
     os.environ["RETRIEVER"] = "tavily,mcp"
-    
+
     researcher = GPTResearcher(
         query="What are the top open source web research agents?",
         mcp_configs=[
@@ -164,7 +164,7 @@ async def mcp_research_example():
             }
         ]
     )
-    
+
     research_result = await researcher.conduct_research()
     report = await researcher.write_report()
     return report
@@ -208,6 +208,32 @@ docker compose up --build
 Visit localhost:3000 on any browser and enjoy researching!
 
 
+## 🧪 Unit Testing
+
+To ensure the reliability of the application, we maintain a suite of unit tests.
+
+### Running with Docker
+
+The easiest way to run tests is within the Docker container to ensure all dependencies are correct.
+
+```bash
+docker exec gpt-researcher-1-gpt-researcher-1 python3 -m pytest tests/unit/
+```
+
+### Running Locally
+
+If you have set up the environment locally:
+
+1. Install dependencies (including testing dependencies):
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Run tests using pytest:
+   ```bash
+   python3 -m pytest tests/unit/
+   ```
+
 ## 📄 Research on Local Documents
 
 You can instruct the GPT Researcher to run research tasks based on your local documents. Currently supported file formats are: PDF, plain text, CSV, Excel, Markdown, PowerPoint, and Word documents.
@@ -218,7 +244,7 @@ Step 1: Add the env variable `DOC_PATH` pointing to the folder where your docume
 export DOC_PATH="./my-docs"
 ```
 
-Step 2: 
+Step 2:
  - If you're running the frontend app on localhost:8000, simply select "My Documents" from the "Report Source" Dropdown Options.
  - If you're running GPT Researcher with the [PIP package](https://docs.tavily.com/guides/gpt-researcher/gpt-researcher#pip-package), pass the `report_source` argument as "local" when you instantiate the `GPTResearcher` class [code sample here](https://docs.gptr.dev/docs/gpt-researcher/context/tailored-research).
 
