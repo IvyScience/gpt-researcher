@@ -1,5 +1,5 @@
-import pytest
 from backend.server.app import ResearchRequest
+
 
 def test_research_request_valid_minimal():
     """Test creating ResearchRequest with minimal required fields."""
@@ -16,8 +16,8 @@ def test_research_request_valid_minimal():
     assert req.headers is None
     assert req.user_id is None
     assert req.language is None
-    assert req.project_id is None
     assert req.research_id is None
+
 
 def test_research_request_all_fields():
     """Test creating ResearchRequest with all fields populated."""
@@ -29,15 +29,14 @@ def test_research_request_all_fields():
         headers={"User-Agent": "Test"},
         user_id=123,
         language="zh-CN",
-        project_id="proj_001",
         research_id="custom_id_1"
     )
     assert req.task == "Test Task"
     assert req.headers == {"User-Agent": "Test"}
     assert req.user_id == 123
     assert req.language == "zh-CN"
-    assert req.project_id == "proj_001"
     assert req.research_id == "custom_id_1"
+
 
 def test_research_request_optional_fields_defaults():
     """Ensure optional fields default to None."""
@@ -50,5 +49,4 @@ def test_research_request_optional_fields_defaults():
     assert req.headers is None
     assert req.user_id is None
     assert req.language is None
-    assert req.project_id is None
     assert req.research_id is None
