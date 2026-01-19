@@ -56,3 +56,96 @@ build:
 
 custom-command:
 	@echo "这是项目特定的命令"
+
+# Override seal target to use --from-env-file instead of --from-file
+seal:
+ifndef env
+	@echo "❌ Error: env parameter is required"
+	@echo "Usage: make seal env=<environment>"
+	@echo "Available environments: $(AVAILABLE_ENVS)"
+	@exit 1
+endif
+	@echo "🔐 生成 $(env) 环境 Sealed Secret (Local Override)..."
+	@echo ""
+
+	@# 验证环境参数
+	@VALID_ENV="false"; \
+	for e in $(AVAILABLE_ENVS); do \
+		if [ "$(env)" = "$$e" ]; then \
+			VALID_ENV="true"; \
+			break; \
+		fi; \
+	done; \
+	if [ "$$VALID_ENV" = "false" ]; then \
+		echo "❌ Error: Unknown environment '$(env)'"; \
+		echo "Available environments: $(AVAILABLE_ENVS)"; \
+		exit 1; \
+	fi; \
+	\
+	case "$(env)" in \
+		production) \
+			NAMESPACE="$(NAMESPACE_PRODUCTION)"; \
+			OVERLAY="production"; \
+			;; \
+		testing) \
+			NAMESPACE="$(NAMESPACE_TESTING)"; \
+			OVERLAY="testing"; \
+			;; \
+		edge-production) \
+			NAMESPACE="$(NAMESPACE_PRODUCTION)"; \
+			OVERLAY="edge-production"; \
+			;; \
+		edge-testing) \
+			NAMESPACE="$(NAMESPACE_TESTING)"; \
+			OVERLAY="edge-testing"; \
+			;; \
+	esac; \
+	\
+	OVERLAY_DIR="$(K8S_BASE_DIR)/$$OVERLAY"; \
+	SETTINGS_FILE="$$OVERLAY_DIR/settings.yaml"; \
+	PUB_KEY="$$OVERLAY_DIR/$(PUB_KEY_FILE)"; \
+	SEALED_FILE="$$OVERLAY_DIR/sealed-settings.yaml"; \
+	\
+	if [ ! -f "$$SETTINGS_FILE" ]; then \
+		echo "❌ Error: 配置文件不存在: $$SETTINGS_FILE"; \
+		exit 1; \
+	fi; \
+	\
+	if [ ! -f "$$PUB_KEY" ]; then \
+		echo "❌ Error: 公钥文件不存在: $$PUB_KEY"; \
+		echo "请确保 $(PUB_KEY_FILE) 存在于 $$OVERLAY_DIR"; \
+		exit 1; \
+	fi; \
+	\
+	echo "📄 配置文件: $$SETTINGS_FILE"; \
+	echo "🔑 公钥文件: $$PUB_KEY"; \
+	echo "🔒 输出文件: $$SEALED_FILE"; \
+	echo "🏷️  Namespace: $$NAMESPACE"; \
+	echo ""; \
+	\
+	cd "$$OVERLAY_DIR" && \
+	kubectl create secret generic $(PROJECT_NAME)-settings \
+		--from-env-file=settings.yaml \
+		--namespace="$$NAMESPACE" \
+		--dry-run=client -o yaml | \
+	kubeseal \
+		--cert $(PUB_KEY_FILE) \
+		--format yaml \
+		> sealed-settings.yaml; \
+	\
+	if [ $$? -eq 0 ]; then \
+		echo "✅ $(env) 环境 Sealed Secret 已生成: $$SEALED_FILE"; \
+		echo ""; \
+		echo "📝 下一步:"; \
+		echo "   1. 查看生成的文件: cat $$SEALED_FILE"; \
+		echo "   2. 提交到 Git（安全）: git add $$SEALED_FILE"; \
+		echo "   3. 部署: make deploy env=$(env)"; \
+	else \
+		echo ""; \
+		echo "❌ 生成 Sealed Secret 失败！"; \
+		echo ""; \
+		echo "请检查:"; \
+		echo "   1. kubeseal 是否已安装: kubeseal --version"; \
+		echo "   2. 公钥文件是否存在: $$PUB_KEY"; \
+		exit 1; \
+	fi
