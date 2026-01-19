@@ -9,4 +9,4 @@ resources:
 
 images:
   - name: registry.cn-shanghai.aliyuncs.com/ivysci/gpt-researcher
-    newTag: e3a2fd4ac5dd352188c24b8d9168e674cb056c9b
+    newTag: 2cee23c07d2009f7c72a374442f3143a2f5100d0
