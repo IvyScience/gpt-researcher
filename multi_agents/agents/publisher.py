@@ -12,7 +12,7 @@ class PublisherAgent:
         self.stream_output = stream_output
         self.output_dir = output_dir.strip()
         self.headers = headers or {}
-        
+
     async def publish_research_report(self, research_state: dict, publish_formats: dict):
         layout = self.generate_layout(research_state)
         await self.write_report_by_formats(layout, publish_formats)
@@ -29,7 +29,7 @@ class PublisherAgent:
             else:
                 # Handle string case
                 sections.append(f"{subheader}")
-        
+
         sections_text = '\n\n'.join(sections)
         references = '\n'.join(f"{reference}" for reference in research_state.get("sources", []))
         headers = research_state.get("headers", {})
@@ -38,9 +38,6 @@ class PublisherAgent:
 
 ## {headers.get("introduction")}
 {research_state.get('introduction')}
-
-## {headers.get("table_of_contents")}
-{research_state.get('table_of_contents')}
 
 {sections_text}
 
@@ -52,7 +49,7 @@ class PublisherAgent:
 """
         return layout
 
-    async def write_report_by_formats(self, layout:str, publish_formats: dict):
+    async def write_report_by_formats(self, layout: str, publish_formats: dict):
         if publish_formats.get("pdf"):
             await write_md_to_pdf(layout, self.output_dir)
         if publish_formats.get("docx"):
@@ -64,7 +61,12 @@ class PublisherAgent:
         task = research_state.get("task")
         publish_formats = task.get("publish_formats")
         if self.websocket and self.stream_output:
-            await self.stream_output("logs", "publishing", f"Publishing final research report based on retrieved data...", self.websocket)
+            await self.stream_output(
+                "logs",
+                "publishing",
+                "Publishing final research report based on retrieved data...",
+                self.websocket,
+            )
         else:
             print_agent_output(output="Publishing final research report based on retrieved data...", agent="PUBLISHER")
         final_research_report = await self.publish_research_report(research_state, publish_formats)

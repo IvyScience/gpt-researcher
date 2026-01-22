@@ -38,7 +38,7 @@ class DetailedReport:
         self.subtopics = subtopics
         self.headers = headers or {}
         self.complement_source_urls = complement_source_urls
-        
+
         # Initialize researcher with optional MCP parameters
         gpt_researcher_params = {
             "query": self.query,
@@ -71,18 +71,19 @@ class DetailedReport:
         logger.info("=" * 80)
         logger.info("Starting detailed report generation with structure planning")
         logger.info("=" * 80)
-        
+
         # Step 1: Initial research
         logger.info("[Step 1] Conducting initial research...")
         await self._initial_research()
         logger.info(f"[Step 1] Completed. Context length: {len(self.global_context)}, URLs: {len(self.global_urls)}")
-        
+
         # Step 2: Get initial subtopics
         logger.info("[Step 2] Generating initial subtopics...")
         initial_subtopics = await self._get_all_subtopics()
         logger.info(f"[Step 2] Generated {len(initial_subtopics)} initial subtopics")
-        logger.info(f"[Step 2] Initial subtopics (BEFORE planning): {[s.get('task', '') for s in initial_subtopics]}")
-        
+        initial_subtopic_tasks = [s.get("task", "") for s in initial_subtopics]
+        logger.info(f"[Step 2] Initial subtopics (BEFORE planning): {initial_subtopic_tasks}")
+
         # Step 3: Collect subtopics and their headers (without writing full reports)
         logger.info("[Step 3] Collecting subtopics and draft headers (without writing full reports)...")
         collected_subtopics_info = await self._collect_subtopics_and_headers(initial_subtopics)
@@ -90,13 +91,14 @@ class DetailedReport:
         for idx, item in enumerate(collected_subtopics_info):
             headers_text = ", ".join([h.get('text', '')[:30] for h in item.get('headers', [])[:3]])
             logger.info(f"[Step 3] Subtopic {idx+1}: {item.get('task', '')[:50]}... | Headers: {headers_text}...")
-        
+
         # Step 4: Reorganize subtopics and headers based on logical structure
         logger.info("[Step 4] Reorganizing subtopics and headers based on logical structure...")
         reorganized_subtopics = await self._reorganize_subtopics_and_headers(collected_subtopics_info)
         logger.info(f"[Step 4] Reorganized {len(reorganized_subtopics)} subtopics")
-        logger.info(f"[Step 4] Reorganized subtopics (AFTER planning): {[s.get('task', '') for s in reorganized_subtopics]}")
-        
+        reorganized_subtopic_tasks = [s.get("task", "") for s in reorganized_subtopics]
+        logger.info(f"[Step 4] Reorganized subtopics (AFTER planning): {reorganized_subtopic_tasks}")
+
         # Log comparison
         logger.info("-" * 80)
         logger.info("COMPARISON: Before vs After Reorganization")
@@ -108,7 +110,7 @@ class DetailedReport:
         for idx, subtopic in enumerate(reorganized_subtopics, 1):
             logger.info(f"  {idx}. {subtopic.get('task', '')}")
         logger.info("-" * 80)
-        
+
         # Step 5: Generate Research Gap
         logger.info("[Step 5] Identifying Research Gap...")
         research_gap_content = await self.gpt_researcher.write_research_gap()
@@ -118,12 +120,12 @@ class DetailedReport:
         logger.info("[Step 6] Writing introduction...")
         report_introduction = await self.gpt_researcher.write_introduction(research_gap=research_gap_content)
         logger.info("[Step 6] Introduction completed")
-        
+
         # Step 7: Generate full reports for reorganized subtopics
         logger.info("[Step 7] Generating full reports for reorganized subtopics...")
         _, report_body = await self._generate_subtopic_reports(reorganized_subtopics)
         logger.info(f"[Step 7] Generated reports for {len(reorganized_subtopics)} subtopics")
-        
+
         # Step 8: Construct final report
         logger.info("[Step 8] Constructing final detailed report...")
         self.gpt_researcher.visited_urls.update(self.global_urls)
@@ -132,7 +134,7 @@ class DetailedReport:
         logger.info("=" * 80)
         logger.info("Detailed report generation completed successfully")
         logger.info("=" * 80)
-        
+
         return report
 
     async def _initial_research(self) -> None:
@@ -156,10 +158,10 @@ class DetailedReport:
         """
         For each subtopic, conduct research and extract draft headers without writing full report.
         This collects information needed for structure planning.
-        
+
         Args:
             subtopics: List of subtopic tasks
-            
+
         Returns:
             List of subtopics with their headers and context
         """
@@ -265,19 +267,19 @@ class DetailedReport:
         """
         Reorganize subtopics and headers into a logical structure.
         Directly generates the final subtopics list with reorganized tasks and headers.
-        
+
         Args:
             subtopics_with_headers: List of subtopics with their headers and context
-            
+
         Returns:
             Reorganized list of subtopics with task and headers (ready for writer)
         """
         if not subtopics_with_headers:
             return subtopics_with_headers
-        
+
         # Combine context from all subtopics
         combined_context = "\n\n".join(self.global_context[:10])  # Use first 10 context items
-        
+
         # Prepare subtopics information for LLM
         subtopics_info = []
         for idx, item in enumerate(subtopics_with_headers):
@@ -286,49 +288,54 @@ class DetailedReport:
                 f"Subtopic {idx + 1}: {item['task']}\n"
                 f"Headers:\n{headers_text}"
             )
-        
+
         combined_subtopics_info = "\n\n".join(subtopics_info)
-        
+
         # Use LLM to reorganize subtopics and headers directly
         try:
             from gpt_researcher.utils.llm import create_chat_completion
-            import json
             import json_repair
-            
+
             # Use the prompt from PromptFamily
             prompt = self.gpt_researcher.prompt_family.generate_reorganize_subtopics_prompt(
                 main_topic=self.query,
                 research_context=combined_context[:2000],
                 subtopics_with_headers=combined_subtopics_info
             )
-            
+
             messages = [
                 {"role": "user", "content": prompt}
             ]
-            
+
             # CRITICAL: Use LOGICAL_LLM (or SMART_LLM as fallback) for logical reasoning
             # This step requires the best model as it needs to:
             # - Understand relationships between subtopics
             # - Merge related concepts logically
             # - Order subtopics in a coherent flow
             # - Ensure headers don't overlap across subtopics
-            
+
             # Use LOGICAL_LLM if configured, otherwise fall back to SMART_LLM
-            logical_model = getattr(self.gpt_researcher.cfg, 'logical_llm_model', None) or self.gpt_researcher.cfg.smart_llm_model
-            logical_provider = getattr(self.gpt_researcher.cfg, 'logical_llm_provider', None) or self.gpt_researcher.cfg.smart_llm_provider
+            logical_model = (
+                getattr(self.gpt_researcher.cfg, "logical_llm_model", None)
+                or self.gpt_researcher.cfg.smart_llm_model
+            )
+            logical_provider = (
+                getattr(self.gpt_researcher.cfg, "logical_llm_provider", None)
+                or self.gpt_researcher.cfg.smart_llm_provider
+            )
             # Use SMART_TOKEN_LIMIT for logical_llm (no separate token limit needed)
             logical_token_limit = self.gpt_researcher.cfg.smart_token_limit
-            
+
             logger.info(f"[CRITICAL] Reorganizing subtopics and headers using LOGICAL model: {logical_model}")
             logger.info("This step requires advanced logical reasoning to ensure coherent report structure")
-            
+
             # Some models (e.g., gpt-5.2-chat) don't support custom temperature, only default (1)
             # Remove temperature from llm_kwargs if model doesn't support it
             llm_kwargs = self.gpt_researcher.cfg.llm_kwargs.copy() if self.gpt_researcher.cfg.llm_kwargs else {}
             if "gpt-5.2" in logical_model.lower():
                 # Remove temperature from kwargs for gpt-5.2-chat (only supports default value 1)
                 llm_kwargs.pop("temperature", None)
-            
+
             completion_kwargs = {
                 "model": logical_model,  # Use LOGICAL_LLM if configured, otherwise SMART_LLM
                 "messages": messages,
@@ -338,18 +345,19 @@ class DetailedReport:
                 "cost_callback": self.gpt_researcher.add_costs,
                 **self.gpt_researcher.kwargs
             }
-            
+
             # Only add temperature if model supports it (gpt-5.2-chat doesn't)
             if "gpt-5.2" not in logical_model.lower():
-                completion_kwargs["temperature"] = 0.3  # Lower temperature for more consistent and logical reorganization
-            
+                # Lower temperature for more consistent and logical reorganization
+                completion_kwargs["temperature"] = 0.3
+
             response = await create_chat_completion(**completion_kwargs)
-            
+
             # Parse JSON response
             try:
                 # Try to extract JSON from response
                 reorganization_result = json_repair.loads(response)
-            except:
+            except Exception:
                 # If direct parsing fails, try to extract JSON block
                 import re
                 json_match = re.search(r'\{.*\}', response, re.DOTALL)
@@ -358,51 +366,48 @@ class DetailedReport:
                 else:
                     logger.warning("Failed to parse reorganization result, returning subtopics as-is")
                     return subtopics_with_headers
-            
+
             # Extract reorganized subtopics
             reorganized_items = reorganization_result.get("reorganized_subtopics", [])
-            
+
             if not reorganized_items:
                 logger.warning("No reorganized subtopics in response, returning original")
                 return subtopics_with_headers
-            
+
             # Convert to our format and preserve context from original subtopics
-            # Create mapping from original task to context
-            task_to_context = {item["task"]: item.get("context", []) for item in subtopics_with_headers}
-            
             reorganized_subtopics = []
             for item in sorted(reorganized_items, key=lambda x: x.get("order", 999)):
                 # Get context from original subtopics if task matches
                 # If merged, combine contexts from multiple original subtopics
                 context = []
                 task_text = item.get("task", "")
-                
+
                 # Try to find matching original subtopic(s) for context
                 for orig_subtopic in subtopics_with_headers:
                     if orig_subtopic["task"] in task_text or task_text in orig_subtopic["task"]:
                         context.extend(orig_subtopic.get("context", []))
-                
+
                 # If no match found, use empty context (will be filled during report generation)
                 if not context:
                     context = []
-                
+
                 reorganized_subtopics.append({
                     "task": task_text,
                     "headers": item.get("headers", []),
                     "context": list(set(context)),  # Remove duplicates
                     "order": item.get("order", 999)
                 })
-            
+
             # Sort by order
             reorganized_subtopics.sort(key=lambda x: x.get("order", 999))
-            
+
             logger.info(f"Reorganized {len(reorganized_subtopics)} subtopics with headers")
             for idx, subtopic in enumerate(reorganized_subtopics, 1):
                 headers_count = len(subtopic.get("headers", []))
                 logger.info(f"  {idx}. {subtopic.get('task', '')[:50]}... ({headers_count} headers)")
-            
+
             return reorganized_subtopics
-            
+
         except Exception as e:
             logger.error(f"Error reorganizing subtopics and headers: {e}", exc_info=True)
             # Fallback: return original subtopics
@@ -412,10 +417,10 @@ class DetailedReport:
         """
         Generate full reports for each reorganized subtopic.
         This happens AFTER structure is planned and subtopics are reorganized.
-        
+
         Args:
             reorganized_subtopics: List of reorganized subtopics with headers and context
-            
+
         Returns:
             Tuple of (subtopic_reports, report_body)
         """
@@ -426,7 +431,7 @@ class DetailedReport:
         for i, subtopic_data in enumerate(reorganized_subtopics):
             current_task = subtopic_data.get("task", "")
             logger.info(f"[Step 7.{i+1}/{total_subtopics}] Generating full report for: {current_task[:50]}...")
-            
+
             result = await self._get_subtopic_report(subtopic_data)
             if result["report"]:
                 subtopic_reports.append(result)
@@ -446,10 +451,10 @@ class DetailedReport:
         Generate full report for a subtopic.
         This is called AFTER structure planning and reorganization.
         The subtopic_data may already contain headers and context from the collection phase.
-        
+
         Args:
             subtopic_data: Subtopic data with task, headers, and context
-            
+
         Returns:
             Dict with topic and report
         """
@@ -546,15 +551,18 @@ class DetailedReport:
 
         except Exception as e:
             logger.error(f"Error generating subtopic report for {current_subtopic_task}: {e}")
-            return {"topic": {"task": current_subtopic_task}, "report": f"# {current_subtopic_task}\n\n*Error: {str(e)}*"}
+            error_report = f"# {current_subtopic_task}\n\n*Error: {str(e)}*"
+            return {
+                "topic": {"task": current_subtopic_task},
+                "report": error_report,
+            }
 
     async def _construct_detailed_report(self, introduction: str, report_body: str, research_gap: str = "") -> str:
-        toc = self.gpt_researcher.table_of_contents(report_body)
         conclusion = await self.gpt_researcher.write_report_conclusion(report_body, research_gap)
-        
+
         # User requested to remove references as this is an intermediate report
         # conclusion_with_references = self.gpt_researcher.add_references(conclusion, self.gpt_researcher.visited_urls)
-        
+
         # Research Gap is integrated into Introduction and Conclusion, not shown as a separate section
-        report = f"{introduction}\n\n{toc}\n\n{report_body}\n\n{conclusion}"
+        report = f"{introduction}\n\n{report_body}\n\n{conclusion}"
         return report
