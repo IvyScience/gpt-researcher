@@ -2,6 +2,7 @@ import re
 import markdown
 from typing import List, Dict
 
+
 def extract_headers(markdown_text: str) -> List[Dict]:
     """
     Extract headers from markdown text.
@@ -38,6 +39,7 @@ def extract_headers(markdown_text: str) -> List[Dict]:
 
     return headers
 
+
 def extract_sections(markdown_text: str) -> List[Dict[str, str]]:
     """
     Extract all written sections from subtopic report.
@@ -51,10 +53,10 @@ def extract_sections(markdown_text: str) -> List[Dict[str, str]]:
     """
     sections = []
     parsed_md = markdown.markdown(markdown_text)
-    
+
     pattern = r'<h\d>(.*?)</h\d>(.*?)(?=<h\d>|$)'
     matches = re.findall(pattern, parsed_md, re.DOTALL)
-    
+
     for title, content in matches:
         clean_content = re.sub(r'<.*?>', '', content).strip()
         if clean_content:
@@ -62,8 +64,9 @@ def extract_sections(markdown_text: str) -> List[Dict[str, str]]:
                 "section_title": title.strip(),
                 "written_content": clean_content
             })
-    
+
     return sections
+
 
 def table_of_contents(markdown_text: str) -> str:
     """
@@ -90,6 +93,7 @@ def table_of_contents(markdown_text: str) -> str:
     except Exception as e:
         print("table_of_contents Exception : ", e)
         return markdown_text
+
 
 def add_references(report_markdown: str, visited_urls: set) -> str:
     """
@@ -150,10 +154,6 @@ def sanitize_citation_links(report_markdown: str, allowed_urls: set[str] | None 
             if _is_placeholder(url_clean):
                 return text
 
-            # If the model kept the placeholder label, replace it with a neutral label.
-            if isinstance(text, str) and text.strip().lower() == "in-text citation":
-                text = "Source"
-
             # If we have an allow-list of sources, drop any citation link not in the allow-list.
             # This prevents hallucinated domains from polluting the report.
             if allowed_urls is not None:
@@ -178,7 +178,7 @@ def sanitize_citation_links(report_markdown: str, allowed_urls: set[str] | None 
 
 def canonicalize_intext_citations(report_markdown: str, allowed_urls: set[str] | None = None) -> str:
     """
-    Force in-text citations to the canonical form: ([Source](url))
+    Force in-text citations to the canonical parenthetical markdown-link form: ([label](url))
 
     Only transforms citations that are already in a parenthetical markdown-link form:
       ([Anything](url))
@@ -188,16 +188,21 @@ def canonicalize_intext_citations(report_markdown: str, allowed_urls: set[str] |
         import re
 
         # Parenthetical markdown link: ([label](url))
-        pattern = re.compile(r"\(\s*\[(?P<label>[^\]]+)\]\((?P<url>[^)]+)\)\s*\)")
+        # Allow empty label/url so we can normalize cases like:
+        #   ([](https://...))  or  ([Smith, 2023]())
+        pattern = re.compile(r"\(\s*\[(?P<label>[^\]]*)\]\((?P<url>[^)]*)\)\s*\)")
 
         def repl(m: re.Match) -> str:
+            label = (m.group("label") or "").strip()
             url = (m.group("url") or "").strip().strip('"').strip("'")
+            safe_label = label or "Citation"
+
             if not url:
-                return "(Source)"
+                return f"({safe_label})"
             if allowed_urls is not None and url not in allowed_urls:
-                # If it's not an allowed source, drop the link but keep neutral label
-                return "(Source)"
-            return f"([Source]({url}))"
+                # If it's not an allowed source, drop the link but keep the label
+                return f"({safe_label})"
+            return f"([{safe_label}]({url}))"
 
         return pattern.sub(repl, report_markdown)
     except Exception:
@@ -236,7 +241,7 @@ def prune_unsupported_citation_claims(report_markdown: str) -> str:
                 continue
 
             # Keep headers, lists, code blocks as-is
-            if stripped.startswith("#") or stripped.startswith("- ") or stripped.startswith("* ") or stripped.startswith("```"):
+            if stripped.startswith(("#", "- ", "* ", "```")):
                 out_paras.append(p)
                 continue
 
