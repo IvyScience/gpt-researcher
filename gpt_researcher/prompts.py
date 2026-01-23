@@ -1,3 +1,6 @@
+# flake8: noqa
+
+import json
 import warnings
 from datetime import date, datetime, timezone
 
@@ -49,10 +52,6 @@ class PromptFamily:
         Returns:
             str: The tool selection prompt
         """
-# flake8: noqa
-
-import json
-
         return f"""You are a research assistant helping to select the most relevant tools for a research query.
 
 RESEARCH QUERY: "{query}"
