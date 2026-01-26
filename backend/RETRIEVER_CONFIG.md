@@ -12,7 +12,7 @@ Retriever 可以通过环境变量或配置文件进行默认设置，无需每�
 
 ```bash
 # 默认的 retriever 配置（支持多个，逗号分隔）
-DEFAULT_RETRIEVERS=internal_biblio,tavily
+DEFAULT_RETRIEVERS=internal_biblio
 
 # Internal API 基础 URL（如果使用 internal_biblio）
 INTERNAL_API_BASE_URL=http://unob.ivy:8080
@@ -25,7 +25,7 @@ INTERNAL_API_BASE_URL=http://unob.ivy:8080
 ```yaml
 environment:
   # 默认 retriever 配置
-  DEFAULT_RETRIEVERS: ${DEFAULT_RETRIEVERS:-internal_biblio,tavily}
+  DEFAULT_RETRIEVERS: ${DEFAULT_RETRIEVERS:-internal_biblio}
   # Internal API 配置
   INTERNAL_API_BASE_URL: ${INTERNAL_API_BASE_URL:-http://unob.ivy:8080}
 ```
@@ -40,9 +40,8 @@ environment:
    - 如果请求中指定了 `retriever` 或 `retrievers`，使用请求中的值
 2. **环境变量 `DEFAULT_RETRIEVERS`**
    - 如果设置了环境变量，使用环境变量的值
-3. **自动推断**
-   - 如果提供了 `user_id`，默认使用 `internal_biblio,tavily`
-   - 如果没有 `user_id`，使用 `RETRIEVER` 环境变量或默认值 `tavily`
+3. **服务端兜底默认值**
+   - 如果未设置 `DEFAULT_RETRIEVERS`，服务端会回落到内置默认值（见 `backend/server/app.py`） :-)
 
 ## 使用示例
 
@@ -51,7 +50,7 @@ environment:
 **设置环境变量：**
 
 ```bash
-export DEFAULT_RETRIEVERS="internal_biblio,tavily"
+export DEFAULT_RETRIEVERS="internal_biblio"
 export INTERNAL_API_BASE_URL="http://unob.ivy:8080"
 ```
 
@@ -86,7 +85,7 @@ python backend/scripts/submit_task.py \
   "user_id": "user123",
   "headers": {
     "user_id": "user123",
-    "retrievers": "tavily,google" // 覆盖默认配置
+    "retrievers": "google" // 覆盖默认配置
   }
 }
 ```
@@ -98,13 +97,13 @@ python backend/scripts/submit_task.py \
 支持的值：
 
 - 单个 retriever: `"tavily"`, `"internal_biblio"`, `"google"` 等
-- 多个 retriever: `"internal_biblio,tavily"`, `"internal_biblio,tavily,google"` 等
+- 多个 retriever: `"internal_biblio,google"`, `"internal_biblio,google,bing"` 等
 
 **推荐配置：**
 
 ```bash
 # 混合模式（推荐）：本地数据 + 网络数据
-DEFAULT_RETRIEVERS=internal_biblio,tavily
+DEFAULT_RETRIEVERS=internal_biblio,google
 
 # 只使用本地数据（不推荐，可能数据不全面）
 DEFAULT_RETRIEVERS=internal_biblio
@@ -125,7 +124,7 @@ DEFAULT_RETRIEVERS=tavily
 
 ```bash
 # Retriever 配置
-DEFAULT_RETRIEVERS=internal_biblio,tavily
+DEFAULT_RETRIEVERS=internal_biblio
 INTERNAL_API_BASE_URL=http://unob.ivy:8080
 
 # 其他配置...
@@ -137,7 +136,7 @@ TAVILY_API_KEY=your_key
 
 ```yaml
 environment:
-  DEFAULT_RETRIEVERS: ${DEFAULT_RETRIEVERS:-internal_biblio,tavily}
+  DEFAULT_RETRIEVERS: ${DEFAULT_RETRIEVERS:-internal_biblio}
   INTERNAL_API_BASE_URL: ${INTERNAL_API_BASE_URL:-http://unob.ivy:8080}
 ```
 
