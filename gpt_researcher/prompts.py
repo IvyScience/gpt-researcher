@@ -1,3 +1,6 @@
+# flake8: noqa
+
+import json
 import warnings
 from datetime import date, datetime, timezone
 
@@ -40,17 +43,15 @@ class PromptFamily:
     def generate_mcp_tool_selection_prompt(query: str, tools_info: List[Dict], max_tools: int = 3) -> str:
         """
         Generate prompt for LLM-based MCP tool selection.
-        
+
         Args:
             query: The research query
             tools_info: List of available tools with their metadata
             max_tools: Maximum number of tools to select
-            
+
         Returns:
             str: The tool selection prompt
         """
-        import json
-        
         return f"""You are a research assistant helping to select the most relevant tools for a research query.
 
 RESEARCH QUERY: "{query}"
@@ -86,11 +87,11 @@ Select exactly {max_tools} tools, ranked by relevance to the research query.
     def generate_mcp_research_prompt(query: str, selected_tools: List) -> str:
         """
         Generate prompt for MCP research execution with selected tools.
-        
+
         Args:
             query: The research query
             selected_tools: List of selected MCP tools
-            
+
         Returns:
             str: The research execution prompt
         """
@@ -101,7 +102,7 @@ Select exactly {max_tools} tools, ranked by relevance to the research query.
                 tool_names.append(tool.name)
             else:
                 tool_names.append(str(tool))
-        
+
         return f"""You are a research assistant with access to specialized tools. Your task is to research the following query and provide comprehensive, accurate information.
 
 RESEARCH QUERY: "{query}"
@@ -211,8 +212,8 @@ Please follow all of the following guidelines in your report:
 - You MUST prioritize the relevance, reliability, and significance of the sources you use. Choose trusted sources over less reliable ones.
 - You must also prioritize new articles over older articles if the source can be trusted.
 - You MUST NOT include a table of contents, but DO include proper markdown headers (# ## ###) to structure your report clearly.
-- Use in-text citations ONLY in this canonical form: **([Source](url))**.
-- The link label MUST be exactly "Source" (case-sensitive) to support downstream citation processing.
+- Use in-text citations ONLY in this canonical form: **([Author, Year](url))**.
+- The link label MUST be an author-year style label (e.g. "Smith, 2023", "WHO, 2024", "OpenAI, n.d."). Do NOT use a generic label like "Source".
 - Only link to URLs that appear in the provided sources (do not fabricate new URLs). If you cannot cite a claim, omit it.
 - Don't forget to add a reference list at the end of the report in {report_format} format and full url links without hyperlinks.
 - {reference_prompt}
@@ -384,8 +385,8 @@ Additional requirements:
 - You MUST determine your own concrete and valid opinion based on the given information. Do NOT defer to general and meaningless conclusions.
 - You MUST prioritize the relevance, reliability, and significance of the sources you use. Choose trusted sources over less reliable ones.
 - You must also prioritize new articles over older articles if the source can be trusted.
-- Use in-text citations ONLY in this canonical form: **([Source](url))** (placed at the end of the sentence/paragraph).
-- The link label MUST be exactly "Source" (case-sensitive). Do not use author/year/title as the link label.
+- Use in-text citations ONLY in this canonical form: **([Author, Year](url))** (placed at the end of the sentence/paragraph).
+- The link label MUST be an author-year style label (do not use a generic label like "Source").
 - {tone_prompt}
 - Write in {language}
 
@@ -606,12 +607,12 @@ Provide the draft headers in a list format using markdown syntax, for example:
         Generate a prompt for reorganizing subtopics and headers into a logical structure.
         This directly generates the final subtopics list that the writer will use.
         This requires logical reasoning and should use a high-quality model.
-        
+
         Args:
             main_topic: The main research topic
             research_context: Combined research context
             subtopics_with_headers: Formatted string of subtopics with their headers
-            
+
         Returns:
             str: The reorganization prompt
         """
@@ -699,9 +700,9 @@ Using the above latest information, Prepare a detailed report introduction on th
 - The introduction should be succinct, well-structured, informative with markdown syntax.
 - As this introduction will be part of a larger report, do NOT include any other sections, which are generally present in a report.
 - The introduction should be preceded by an H1 heading with a suitable topic for the entire report.
-{gap_instruction}- You must use in-text citations in {report_format.upper()} format as markdown hyperlinks. 
-- Use in-text citations ONLY in this canonical form: **([Source](url))**.
-- The link label MUST be exactly "Source" (case-sensitive) to support downstream citation processing.
+{gap_instruction}- You must use in-text citations in {report_format.upper()} format as markdown hyperlinks.
+- Use in-text citations ONLY in this canonical form: **([Author, Year](url))**.
+- The link label MUST be an author-year style label (e.g. "Smith, 2023", "WHO, 2024", "OpenAI, n.d."). Do NOT use a generic label like "Source".
 Assume that the current date is {datetime.now(timezone.utc).strftime('%B %d, %Y')} if required.
 - The output must be in {language} language.
 """
@@ -740,10 +741,10 @@ Assume that the current date is {datetime.now(timezone.utc).strftime('%B %d, %Y'
     5. Be approximately 2-3 paragraphs long
 
     If there is no "## Conclusion" section title written at the end of the report, please add it to the top of your conclusion.
-    You must use in-text citations in {report_format.upper()} format as markdown hyperlinks. 
+    You must use in-text citations in {report_format.upper()} format as markdown hyperlinks.
 
-    Use in-text citations ONLY in this canonical form: **([Source](url))**.
-    The link label MUST be exactly "Source" (case-sensitive) to support downstream citation processing.
+    Use in-text citations ONLY in this canonical form: **([Author, Year](url))**.
+    The link label MUST be an author-year style label (e.g. "Smith, 2023", "WHO, 2024", "OpenAI, n.d."). Do NOT use a generic label like "Source".
 
     IMPORTANT: The entire conclusion MUST be written in {language} language.
 
