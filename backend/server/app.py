@@ -499,8 +499,8 @@ async def generate_report(
         if default_retrievers:
             headers["retrievers"] = default_retrievers
         else:
-            # Fall back to default retrievers: internal_biblio, internal_highlight, internal_file, noteexpress, tavily
-            headers["retrievers"] = "internal_biblio,internal_highlight,internal_file,noteexpress,tavily"
+            # Fall back to default retrievers: internal_biblio, internal_highlight, internal_file, noteexpress :-)
+            headers["retrievers"] = "internal_biblio,internal_highlight,internal_file,noteexpress"
 
     # Update request headers
     research_request.headers = headers
