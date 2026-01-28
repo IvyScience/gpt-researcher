@@ -433,7 +433,7 @@ async def send_webhook_notification(
         if webhook_host_header:
             headers["Host"] = webhook_host_header
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
             result = await client.post(webhook_url, json=payload, headers=headers)
             try:
                 result.raise_for_status()

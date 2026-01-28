@@ -57,6 +57,9 @@ build:
 custom-command:
 	@echo "这是项目特定的命令"
 
+webhook-test:
+	python -m backend.server.webhook_test
+
 # Override seal target to use --from-env-file instead of --from-file
 seal:
 ifndef env
