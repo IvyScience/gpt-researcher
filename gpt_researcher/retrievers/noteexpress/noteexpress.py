@@ -14,14 +14,14 @@ logger = logging.getLogger(__name__)
 class NoteExpressRetriever:
     """
     NoteExpress API Retriever for accessing academic papers via semantic search.
-    
+
     This retriever connects to the NoteExpress API endpoint to retrieve academic papers
     using semantic search. It returns papers with DOI links and formatted content.
     """
 
     def __init__(
-        self, 
-        query: str, 
+        self,
+        query: str,
         headers: Optional[Dict[str, str]] = None,
         query_domains: Optional[List[str]] = None,
         **kwargs
@@ -42,26 +42,27 @@ class NoteExpressRetriever:
         self.query = query
         self.headers = headers or {}
         self.query_domains = query_domains or []
-        
+
         # Get API key from headers or environment variable
         api_key = (
-            self.headers.get("noteexpress_api_key") or
-            os.getenv("NOTEEXPRESS_API_KEY")
+            self.headers.get("noteexpress_api_key")
+            or os.getenv("NOTEEXPRESS_API_KEY")
         )
-        
+
         # Get base URL from headers or environment variable, with default
+        default_url = "https://service.inoteexpress.com/papers-graph-backend"
         base_url = (
-            self.headers.get("noteexpress_base_url") or
-            os.getenv("NOTEEXPRESS_BASE_URL", "https://service.inoteexpress.com/papers-graph-backend")
+            self.headers.get("noteexpress_base_url")
+            or os.getenv("NOTEEXPRESS_BASE_URL", default_url)
         )
-        
+
         # Store configuration for client creation
         self.api_key = api_key
         self.base_url = base_url
         self.client_headers = {"Accept": "application/json, text/plain, */*"}
         if api_key:
             self.client_headers["Authorization"] = f"Bearer {api_key}"
-        
+
         logger.info(
             f"Initialized NoteExpressRetriever with base_url={base_url}, "
             f"has_api_key={bool(api_key)}"
@@ -78,8 +79,10 @@ class NoteExpressRetriever:
             List of search results in the format:
             [
                 {
-                    "href": "https://doi.org/{doi}",
-                    "body": "Authors: ... | Title: ... | Abstract: ..."
+                    "url": "https://doi.org/{doi}",
+                    "title": "...",
+                    "raw_content": "...",
+                    "skip_scrape": true
                 },
                 ...
             ]
@@ -99,32 +102,32 @@ class NoteExpressRetriever:
                     "query": self.query.strip(),
                     "limit": min(max_results, 20),  # API 最多只支持 20 条
                 }
-                
+
                 logger.info(
                     f"Searching NoteExpress API: {url} with query: {self.query[:50]}..."
                 )
-                
+
                 # Make the API request
                 response = client.get(url, params=params)
                 response.raise_for_status()
-                
+
                 # Parse the response
                 resp_data = response.json()
-                
+
                 # Extract papers from response (expected format: {"papers": [...]})
                 papers = resp_data.get("papers", [])
-                
+
                 # Transform the response to match the expected format
                 results = []
                 for paper_data in papers:
                     result = self._transform_paper(paper_data)
                     if result:
                         results.append(result)
-                
+
                 logger.info(f"Retrieved {len(results)} results from NoteExpress API")
-                
+
                 return results
-                
+
             except httpx.RequestError as e:
                 logger.error(f"Failed to retrieve search results from NoteExpress API: {e}")
                 return []
@@ -138,16 +141,16 @@ class NoteExpressRetriever:
     def _transform_paper(self, paper_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Transform a single paper from the API response.
-        
+
         Args:
             paper_data: A single paper dictionary from the API
-            
+
         Returns:
             Transformed paper dict with href and body, or None if transformation fails
         """
         if not isinstance(paper_data, dict):
             return None
-        
+
         # Extract DOI for href
         doi = paper_data.get("doi", "").strip()
         if doi:
@@ -157,25 +160,34 @@ class NoteExpressRetriever:
             # For now, we'll skip papers without DOI
             logger.debug(f"Paper missing DOI, skipping. Title: {paper_data.get('title', 'Unknown')[:50]}")
             return None
-        
+
         # Extract title
         title = paper_data.get("title", "").strip()
         if not title:
             logger.debug("Paper missing title, skipping")
             return None
-        
+
         # Extract authors
         authors = paper_data.get("authors", [])
         authors_str = ""
+        author_label = ""
         if authors and isinstance(authors, list):
-            # Format authors list
             author_names = [str(a) for a in authors if a]
             if author_names:
                 authors_str = ", ".join(author_names)
-        
+                if len(author_names) == 1:
+                    author_label = author_names[0]
+                elif len(author_names) == 2:
+                    author_label = f"{author_names[0]} & {author_names[1]}"
+                else:
+                    author_label = f"{author_names[0]} et al."
+
+        year_val = paper_data.get("year") or paper_data.get("publication_year") or paper_data.get("pub_year")
+        year = str(year_val) if isinstance(year_val, (str, int)) else ""
+
         # Extract abstract
         abstract = paper_data.get("abstract", "").strip()
-        
+
         # Build body: Authors | Title | Abstract
         body_parts = []
         if authors_str:
@@ -184,15 +196,22 @@ class NoteExpressRetriever:
             body_parts.append(f"Title: {title}")
         if abstract:
             body_parts.append(f"Abstract: {abstract}")
-        
+
         body = "\n".join(body_parts)
-        
+
         if not body:
             logger.debug("Paper missing all content fields, skipping")
             return None
-        
-        return {
-            "href": href,
-            "body": body
-        }
 
+        # IMPORTANT: downstream context compressors expect SearchAPI-shaped keys:
+        # - url/raw_content/title, and `skip_scrape` prevents re-scraping protected sources.
+        return {
+            "url": href,
+            "title": title,
+            "raw_content": body,
+            "author": author_label,
+            "year": year,
+            "skip_scrape": True,
+            "href": href,
+            "body": body,
+        }
