@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import time
+import random
 from typing import Any, Dict, Optional
 
 import httpx
@@ -65,6 +66,9 @@ async def _post(
     api_key: Optional[str],
     host_header: Optional[str],
     trust_env: bool,
+    retries: int,
+    retry_base_delay: float,
+    retry_on_404_not_found: bool,
 ) -> httpx.Response:
     headers: Dict[str, str] = {}
     if api_key:
@@ -73,7 +77,34 @@ async def _post(
         headers["Host"] = host_header
 
     async with httpx.AsyncClient(timeout=10.0, trust_env=trust_env) as client:
-        return await client.post(url, json=payload, headers=headers)
+        last_resp: httpx.Response | None = None
+        for attempt in range(1, max(1, retries) + 1):
+            resp = await client.post(url, json=payload, headers=headers)
+            last_resp = resp
+            if resp.status_code < 400:
+                return resp
+
+            body = ""
+            try:
+                body = resp.text or ""
+            except Exception:
+                body = ""
+
+            is_not_found_report = (
+                resp.status_code == 404
+                and ("Research report not found" in body or "report not found" in body.lower())
+            )
+            if retry_on_404_not_found and is_not_found_report and attempt < retries:
+                # jittered exponential backoff :-)
+                delay = min(6.0, retry_base_delay * (2 ** (attempt - 1)))
+                delay = delay + random.uniform(0, 0.25)
+                print(f"[retry] 404 not found, sleeping {delay:.2f}s (attempt {attempt}/{retries})")
+                await asyncio.sleep(delay)
+                continue
+
+            return resp
+
+        return last_resp if last_resp is not None else await client.post(url, json=payload, headers=headers)
 
 
 async def main() -> int:
@@ -134,6 +165,23 @@ async def main() -> int:
         action="store_true",
         help="Allow httpx to use env proxies (default: disabled).",
     )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=int(os.getenv("WEBHOOK_TEST_RETRIES", "4")),
+        help="Max attempts (default 4; env WEBHOOK_TEST_RETRIES).",
+    )
+    parser.add_argument(
+        "--retry-base-delay",
+        type=float,
+        default=float(os.getenv("WEBHOOK_TEST_RETRY_BASE_DELAY_SECONDS", "0.6")),
+        help="Base delay seconds for retry backoff (default 0.6).",
+    )
+    parser.add_argument(
+        "--retry-on-404-not-found",
+        action="store_true",
+        help="Retry when receiver returns 404 'Research report not found'.",
+    )
     args = parser.parse_args()
 
     if not args.url:
@@ -159,6 +207,9 @@ async def main() -> int:
         api_key=args.api_key or None,
         host_header=args.host_header or None,
         trust_env=bool(args.trust_env),
+        retries=max(1, int(args.retries)),
+        retry_base_delay=float(args.retry_base_delay),
+        retry_on_404_not_found=bool(args.retry_on_404_not_found),
     )
 
     body = resp.text

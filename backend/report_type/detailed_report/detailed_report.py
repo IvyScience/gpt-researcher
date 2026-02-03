@@ -8,6 +8,62 @@ from gpt_researcher import GPTResearcher
 logger = logging.getLogger(__name__)
 
 
+def _extract_source_url(block: str) -> str:
+    """Extract URL from first 'Source: <url>' line in a context block. :-)"""
+    if not block or not isinstance(block, str):
+        return ""
+    for line in block.split("\n"):
+        line = line.strip()
+        if line.lower().startswith("source:"):
+            return line[7:].strip()
+    return ""
+
+
+def _dedupe_blocks_by_url(blocks: List[str]) -> List[str]:
+    """Dedupe context blocks by Source URL; same URL = same source, keep first. :-)"""
+    seen_urls: Set[str] = set()
+    result = []
+    for b in blocks:
+        url = _extract_source_url(b)
+        key = url if url else b  # Fallback to full block when no Source line
+        if key not in seen_urls:
+            seen_urls.add(key)
+            result.append(b)
+    return result
+
+
+def _context_to_string(ctx) -> str:
+    """
+    Normalize context (str or list) to a single string.
+    CRITICAL: Never use list(set(ctx)) when ctx is a string - that would turn it into
+    a list of characters and destroy the Source/Title/Content format for citations. :-)
+    """
+    if ctx is None:
+        return ""
+    if isinstance(ctx, str):
+        return ctx.strip()
+    if isinstance(ctx, list):
+        parts = []
+        for c in ctx:
+            if isinstance(c, str) and c.strip():
+                parts.append(c.strip())
+            elif c is not None and str(c).strip():
+                parts.append(str(c).strip())
+        return "\n\n".join(parts) if parts else ""
+    return str(ctx).strip() if str(ctx).strip() else ""
+
+
+def _collect_context_blocks(ctx) -> List[str]:
+    """Collect context as list of string blocks (for dedupe). Never treat a string as iterable of chars."""
+    if ctx is None:
+        return []
+    if isinstance(ctx, str) and ctx.strip():
+        return [ctx.strip()]
+    if isinstance(ctx, list):
+        return [c.strip() for c in ctx if isinstance(c, str) and c.strip()]
+    return [str(ctx).strip()] if str(ctx).strip() else []
+
+
 class DetailedReport:
     def __init__(
         self,
@@ -193,8 +249,8 @@ class DetailedReport:
                     mcp_strategy=self.gpt_researcher.mcp_strategy
                 )
 
-                # Conduct research with timeout
-                subtopic_assistant.context = list(set(self.global_context))
+                # Conduct research with timeout (pass prior context as string; never list(set(str)) - that destroys it)
+                subtopic_assistant.context = _context_to_string(self.global_context)
 
                 # Add timeout to prevent hanging (3 minutes per subtopic)
                 try:
@@ -229,8 +285,8 @@ class DetailedReport:
                         parse_draft_section_titles = []
                         draft_section_titles = ""
 
-                # Update global context and URLs
-                self.global_context = list(set(subtopic_assistant.context))
+                # Update global context and URLs (keep as string for Source/Title/Content format)
+                self.global_context = _context_to_string(subtopic_assistant.context)
                 self.global_urls.update(subtopic_assistant.visited_urls)
 
                 # Aggregate costs and tokens from subtopic assistant
@@ -277,8 +333,8 @@ class DetailedReport:
         if not subtopics_with_headers:
             return subtopics_with_headers
 
-        # Combine context from all subtopics
-        combined_context = "\n\n".join(self.global_context[:10])  # Use first 10 context items
+        # Combine context from all subtopics (global_context is string; never join chars)
+        combined_context = _context_to_string(self.global_context)
 
         # Prepare subtopics information for LLM
         subtopics_info = []
@@ -379,22 +435,21 @@ class DetailedReport:
             for item in sorted(reorganized_items, key=lambda x: x.get("order", 999)):
                 # Get context from original subtopics if task matches
                 # If merged, combine contexts from multiple original subtopics
-                context = []
+                # CRITICAL: orig_subtopic["context"] is a STRING - never .extend() it (that adds chars)
+                context_blocks = []
                 task_text = item.get("task", "")
 
-                # Try to find matching original subtopic(s) for context
                 for orig_subtopic in subtopics_with_headers:
                     if orig_subtopic["task"] in task_text or task_text in orig_subtopic["task"]:
-                        context.extend(orig_subtopic.get("context", []))
+                        context_blocks.extend(_collect_context_blocks(orig_subtopic.get("context")))
 
-                # If no match found, use empty context (will be filled during report generation)
-                if not context:
-                    context = []
+                # Dedupe by Source URL (same url = same source)
+                unique_blocks = _dedupe_blocks_by_url(context_blocks)
 
                 reorganized_subtopics.append({
                     "task": task_text,
                     "headers": item.get("headers", []),
-                    "context": list(set(context)),  # Remove duplicates
+                    "context": unique_blocks,
                     "order": item.get("order", 999)
                 })
 
@@ -483,11 +538,10 @@ class DetailedReport:
                 mcp_strategy=self.gpt_researcher.mcp_strategy
             )
 
-            # Use the context collected earlier (if available)
-            if subtopic_context:
-                subtopic_assistant.context = list(set(subtopic_context + self.global_context))
-            else:
-                subtopic_assistant.context = list(set(self.global_context))
+            # Use the context collected earlier (merge subtopic + global; dedupe by Source URL)
+            blocks = _collect_context_blocks(subtopic_context) + _collect_context_blocks(self.global_context)
+            unique = _dedupe_blocks_by_url(blocks)
+            subtopic_assistant.context = "\n\n".join(unique) if unique else _context_to_string(self.global_context)
 
             # Use the headers extracted earlier (if available)
             if existing_headers_for_subtopic:
@@ -529,9 +583,9 @@ class DetailedReport:
                 logger.warning(f"Report writing timed out for subtopic: {current_subtopic_task}")
                 subtopic_report = f"# {current_subtopic_task}\n\n*Report generation timed out after 5 minutes*"
 
-            # Update tracking
+            # Update tracking (keep context as string for next subtopic)
             self.global_written_sections.extend(self.gpt_researcher.extract_sections(subtopic_report))
-            self.global_context = list(set(subtopic_assistant.context))
+            self.global_context = _context_to_string(subtopic_assistant.context)
             self.global_urls.update(subtopic_assistant.visited_urls)
 
             # Aggregate costs and tokens from subtopic assistant

@@ -137,13 +137,45 @@ def sanitize_citation_links(report_markdown: str, allowed_urls: set[str] | None 
                 return True
             if u.lower() == "url":
                 return True
+            if "exampleurl" in u.lower():
+                return True
             if "example.com" in u.lower():
+                return True
+            if "example.org" in u.lower():
+                return True
+            if "openai.com" in u.lower():
                 return True
             return False
 
         def _normalize_url(u: str) -> str:
             u = (u or "").strip().strip('"').strip("'")
             return u
+
+        def _canonical_for_allowlist(u: str) -> str:
+            """
+            Canonicalize URLs for allowlist comparisons (fixes false negatives like http/https, trailing slash). :-)
+            """
+            u = _normalize_url(u)
+            if not u:
+                return ""
+            try:
+                parsed = urlparse(u)
+                scheme = (parsed.scheme or "").lower()
+                netloc = (parsed.netloc or "").lower()
+                path = (parsed.path or "").rstrip("/")
+                # Normalize doi.org scheme/host
+                if netloc in {"doi.org", "dx.doi.org"}:
+                    scheme = "https"
+                    netloc = "doi.org"
+                if scheme and netloc:
+                    return f"{scheme}://{netloc}{path}"
+            except Exception:
+                pass
+            return u.rstrip("/")
+
+        allowed_canon: set[str] | None = None
+        if allowed_urls is not None:
+            allowed_canon = {_canonical_for_allowlist(a) for a in allowed_urls if a}
 
         def repl(m: re.Match) -> str:
             text = m.group("text")
@@ -157,7 +189,7 @@ def sanitize_citation_links(report_markdown: str, allowed_urls: set[str] | None 
             # If we have an allow-list of sources, drop any citation link not in the allow-list.
             # This prevents hallucinated domains from polluting the report.
             if allowed_urls is not None:
-                if url_clean not in allowed_urls:
+                if allowed_canon is not None and _canonical_for_allowlist(url_clean) not in allowed_canon:
                     return text
 
             # Some models emit malformed "url" tokens; treat non-URLs as placeholders in citations
@@ -186,11 +218,34 @@ def canonicalize_intext_citations(report_markdown: str, allowed_urls: set[str] |
     """
     try:
         import re
+        from urllib.parse import urlparse
 
         # Parenthetical markdown link: ([label](url))
         # Allow empty label/url so we can normalize cases like:
         #   ([](https://...))  or  ([Smith, 2023]())
         pattern = re.compile(r"\(\s*\[(?P<label>[^\]]*)\]\((?P<url>[^)]*)\)\s*\)")
+
+        def _canonical_for_allowlist(u: str) -> str:
+            u = (u or "").strip().strip('"').strip("'")
+            if not u:
+                return ""
+            try:
+                parsed = urlparse(u)
+                scheme = (parsed.scheme or "").lower()
+                netloc = (parsed.netloc or "").lower()
+                path = (parsed.path or "").rstrip("/")
+                if netloc in {"doi.org", "dx.doi.org"}:
+                    scheme = "https"
+                    netloc = "doi.org"
+                if scheme and netloc:
+                    return f"{scheme}://{netloc}{path}"
+            except Exception:
+                pass
+            return u.rstrip("/")
+
+        allowed_canon: set[str] | None = None
+        if allowed_urls is not None:
+            allowed_canon = {_canonical_for_allowlist(a) for a in allowed_urls if a}
 
         def repl(m: re.Match) -> str:
             label = (m.group("label") or "").strip()
@@ -199,7 +254,7 @@ def canonicalize_intext_citations(report_markdown: str, allowed_urls: set[str] |
 
             if not url:
                 return f"({safe_label})"
-            if allowed_urls is not None and url not in allowed_urls:
+            if allowed_canon is not None and _canonical_for_allowlist(url) not in allowed_canon:
                 # If it's not an allowed source, drop the link but keep the label
                 return f"({safe_label})"
             return f"([{safe_label}]({url}))"
@@ -207,6 +262,38 @@ def canonicalize_intext_citations(report_markdown: str, allowed_urls: set[str] |
         return pattern.sub(repl, report_markdown)
     except Exception:
         return report_markdown
+
+
+def extract_source_urls_from_context(context: str) -> set[str]:
+    """
+    Extract source URLs/IDs from the context string that is provided to the LLM.
+    Supports both default and Granite prompt-family formats. :-)
+    """
+    try:
+        import re
+
+        if not context:
+            return set()
+
+        sources: set[str] = set()
+
+        # Default prompt family: "Source: <url>"
+        for m in re.finditer(r"(?mi)^\s*Source:\s*(?P<url>\S+)\s*$", context):
+            u = m.group("url").strip()
+            if u and u.lower() not in ("none", "null", "n/a"):
+                sources.add(u)
+
+        # Granite 3.x: "Document <document_id>"
+        for m in re.finditer(r"(?mi)^\s*Document\s+(?P<url>\S+)\s*$", context):
+            sources.add(m.group("url").strip())
+
+        # Granite 3.3: document {"document_id": "..."}
+        for m in re.finditer(r'"document_id"\s*:\s*"(?P<url>[^"]+)"', context):
+            sources.add(m.group("url").strip())
+
+        return sources
+    except Exception:
+        return set()
 
 
 def prune_unsupported_citation_claims(report_markdown: str) -> str:
@@ -221,6 +308,31 @@ def prune_unsupported_citation_claims(report_markdown: str) -> str:
     try:
         import re
 
+        def _extract_context_sources(text: str) -> set[str]:
+            sources: set[str] = set()
+            if not text:
+                return sources
+
+            def _valid(u: str) -> bool:
+                return u and u.lower() not in ("none", "null", "n/a")
+
+            # Default prompt family: "Source: <url>"
+            for m in re.finditer(r"(?mi)^\s*Source:\s*(?P<url>\S+)\s*$", text):
+                u = m.group("url").strip()
+                if _valid(u):
+                    sources.add(u)
+            # Granite prompt family: "Document <document_id>"
+            for m in re.finditer(r"(?mi)^\s*Document\s+(?P<url>\S+)\s*$", text):
+                u = m.group("url").strip()
+                if _valid(u):
+                    sources.add(u)
+            # Granite 3.3 format: document {"document_id": "..."}
+            for m in re.finditer(r'"document_id"\s*:\s*"(?P<url>[^"]+)"', text):
+                u = m.group("url").strip()
+                if _valid(u):
+                    sources.add(u)
+            return sources
+
         # Heuristics: sentences that are likely to be fabricated without sources
         risky = re.compile(
             r"\b("
@@ -229,6 +341,11 @@ def prune_unsupported_citation_claims(report_markdown: str) -> str:
             r"\d+(\.\d+)?%|times more likely|statistically significant"
             r")\b",
             re.IGNORECASE,
+        )
+
+        # Chinese heuristics: keep conservative (only strong "research says" phrases) :-)
+        risky_zh = re.compile(
+            r"(研究表明|研究发现|文献表明|文献显示|有研究指出|实证研究表明|调查发现|数据表明|数据显示)"
         )
 
         # Split by paragraph to keep markdown structure
@@ -246,14 +363,14 @@ def prune_unsupported_citation_claims(report_markdown: str) -> str:
                 continue
 
             # Sentence-ish split (simple, language-agnostic enough for our use case)
-            parts = re.split(r"(?<=[.!?])\s+", p)
+            parts = re.split(r"(?<=[.!?。！？])\s+", p)
             kept: list[str] = []
             for s in parts:
                 s_strip = s.strip()
                 if not s_strip:
                     continue
                 has_citation_link = "](" in s_strip  # markdown link
-                if (not has_citation_link) and risky.search(s_strip):
+                if (not has_citation_link) and (risky.search(s_strip) or risky_zh.search(s_strip)):
                     # Drop uncited risky claim
                     continue
                 kept.append(s)

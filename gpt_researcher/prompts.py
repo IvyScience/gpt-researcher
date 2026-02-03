@@ -1,12 +1,56 @@
 # flake8: noqa
 
 import json
+import os
 import warnings
 from datetime import date, datetime, timezone
 
 from langchain_core.documents import Document
 
 from .config import Config
+
+
+def _citation_use_placeholder() -> bool:
+    """Whether to use [citation required] placeholders (filled post-hoc by retrievers). :-)"""
+    v = os.getenv("CITATION_USE_PLACEHOLDER", "").strip().lower()
+    return v in ("1", "true", "yes", "y", "on")
+
+
+def _citation_instruction_subtopic() -> str:
+    """Citation instruction for subtopic report (placeholder vs direct). :-)"""
+    if _citation_use_placeholder():
+        return """Where a citation is needed, write exactly [citation required] (no URLs).
+    Example: "This finding suggests X [citation required]." Citations will be filled later by retrieval."""
+    return """You MUST include markdown hyperlinks to relevant source URLs wherever referenced.
+    Example: This is a sample text ([Source](<SOURCE_URL_FROM_PROVIDED_INFORMATION>)).
+    IMPORTANT: Never use placeholder domains (example.org, openai.com). Only cite URLs from the provided context."""
+
+
+def _citation_instruction_conclusion(report_format: str = "apa") -> str:
+    """Citation instruction for conclusion. :-)"""
+    if _citation_use_placeholder():
+        return "Use [citation required] where a citation is needed. Do NOT invent URLs."
+    return f"""You must use in-text citations in {report_format.upper()} format as markdown hyperlinks.
+    Use in-text citations ONLY in this canonical form: **([Author, Year](url))**.
+    IMPORTANT: Only cite URLs that already appear in the provided Research Report text. Do NOT introduce new URLs."""
+
+
+def _citation_instruction_intro(report_format: str = "apa") -> str:
+    """Citation instruction for introduction. :-)"""
+    if _citation_use_placeholder():
+        return "- Use [citation required] where a citation is needed. Do NOT invent URLs."
+    return f"""- You must use in-text citations in {report_format.upper()} format as markdown hyperlinks.
+- Use in-text citations ONLY in this canonical form: **([Author, Year](url))**.
+- The link label MUST be an author-year style label. Do NOT use a generic label like "Source"."""
+
+
+def _citation_important_subtopic(report_format: str = "apa") -> str:
+    """Citation rules for IMPORTANT section (placeholder vs direct). :-)"""
+    if _citation_use_placeholder():
+        return "- Use [citation required] where a source citation is needed. Do NOT invent URLs."
+    return f"""- You MUST use in-text citations in {report_format.upper()} format as markdown hyperlinks.
+  - Citations MUST be markdown links with a real URL from the provided Context.
+  - NEVER output bare (Source) without a URL. If you cannot attach a real URL from Context, omit the claim."""
 from .utils.enum import ReportSource, ReportType, Tone
 from .utils.enum import PromptFamily as PromptFamilyEnum
 from typing import Callable, List, Dict, Any
@@ -213,8 +257,9 @@ Please follow all of the following guidelines in your report:
 - You must also prioritize new articles over older articles if the source can be trusted.
 - You MUST NOT include a table of contents, but DO include proper markdown headers (# ## ###) to structure your report clearly.
 - Use in-text citations ONLY in this canonical form: **([Author, Year](url))**.
-- The link label MUST be an author-year style label (e.g. "Smith, 2023", "WHO, 2024", "OpenAI, n.d."). Do NOT use a generic label like "Source".
-- Only link to URLs that appear in the provided sources (do not fabricate new URLs). If you cannot cite a claim, omit it.
+- The link label MUST be an author-year style label (e.g. "Smith, 2023", "WHO, 2024", "OECD, n.d."). Do NOT use a generic label like "Source".
+- Your citations MUST be grounded in the provided Information context: only cite URLs/Source IDs that appear in the Information (e.g., in "Source:" / "Document" blocks). Do NOT fabricate new URLs or cite sources you did not receive.
+- Every cited sentence/paragraph MUST be directly supported by the cited source's Content in the provided Information. Do NOT generalize beyond what is stated (especially when only abstracts/snippets are available). If you cannot support a claim, omit it.
 - Don't forget to add a reference list at the end of the report in {report_format} format and full url links without hyperlinks.
 - {reference_prompt}
 - {tone_prompt}
@@ -440,12 +485,19 @@ response:
 
     @staticmethod
     def pretty_print_docs(docs: list[Document], top_n: int | None = None) -> str:
-        """Compress the list of documents into a context string"""
-        return f"\n".join(f"Source: {d.metadata.get('source')}\n"
-                          f"Title: {d.metadata.get('title')}\n"
-                          f"Content: {d.page_content}\n"
-                          for i, d in enumerate(docs)
-                          if top_n is None or i < top_n)
+        """Compress the list of documents into a context string.
+        Use empty string for missing source/title to avoid 'Source: None' confusing the LLM. :-)
+        """
+        lines = []
+        for i, d in enumerate(docs):
+            if top_n is not None and i >= top_n:
+                break
+            src = d.metadata.get("source")
+            src = "" if src is None else str(src).strip()
+            title = d.metadata.get("title")
+            title = "" if title is None else str(title).strip()
+            lines.append(f"Source: {src}\nTitle: {title}\nContent: {d.page_content or ''}\n")
+        return "\n".join(lines)
 
     @staticmethod
     def join_local_web_documents(docs_context: str, web_context: str) -> str:
@@ -527,11 +579,7 @@ IMPORTANT:Content and Sections Uniqueness:
 "Structure and Formatting":
 - As this sub-report will be part of a larger report, include only the main body divided into suitable subtopics without any introduction or conclusion section.
 
-- You MUST include markdown hyperlinks to relevant source URLs wherever referenced in the report, for example:
-
-    ### Section Header
-
-    This is a sample text ([Source](https://example.org)).
+- For citations: {_citation_instruction_subtopic()}
 
 - Use H2 for the main subtopic header (##) and H3 for subsections (###).
     - **Important**: Do NOT use H4 headers (####) or lower. Limit the hierarchy to H2 and H3 only.
@@ -539,11 +587,8 @@ IMPORTANT:Content and Sections Uniqueness:
     - **Length**: Ensure each section is substantial (at least 3 paragraphs). Do not create headers for very short content.
 - Use smaller Markdown headers (e.g., H2 or H3) for content structure, avoiding the largest header (H1) as it will be used for the larger report's heading.
 - Organize your content into distinct sections that complement but do not overlap with existing reports.
-- When adding similar or identical subsections to your report, you should clearly indicate the differences between and the new content and the existing written content from previous subtopic reports. For example:
-
-    ### New header (similar to existing header)
-
-    While the previous section discussed [topic A], this section will explore [topic B]."
+- When adding similar or identical subsections to your report, you MUST clearly indicate the differences between the new content and the existing written content from previous subtopic reports.
+- IMPORTANT: If you need to write a "difference" sentence, write it ONLY in {language} (do NOT copy any English template phrases). :-)
 
 "Date":
 Assume the current date is {datetime.now(timezone.utc).strftime('%B %d, %Y')} if required.
@@ -552,7 +597,7 @@ Assume the current date is {datetime.now(timezone.utc).strftime('%B %d, %Y')} if
 - You MUST write the report in the following language: {language}.
 - The focus MUST be on the main topic! You MUST Leave out any information un-related to it!
 - Must NOT have any introduction, conclusion, summary or reference section.
-- You MUST use in-text citations in {report_format.upper()} format as markdown hyperlinks. NEVER use "in-text citation" as link text; use "Source" if author/year are unknown.
+{_citation_important_subtopic(report_format)}
 - You MUST mention the difference between the existing content and the new content in the report if you are adding the similar or same subsections wherever necessary.
 - The report should have a minimum length of {total_words} words.
 - Use an {tone.value} tone throughout the report.
@@ -700,9 +745,9 @@ Using the above latest information, Prepare a detailed report introduction on th
 - The introduction should be succinct, well-structured, informative with markdown syntax.
 - As this introduction will be part of a larger report, do NOT include any other sections, which are generally present in a report.
 - The introduction should be preceded by an H1 heading with a suitable topic for the entire report.
-{gap_instruction}- You must use in-text citations in {report_format.upper()} format as markdown hyperlinks.
-- Use in-text citations ONLY in this canonical form: **([Author, Year](url))**.
-- The link label MUST be an author-year style label (e.g. "Smith, 2023", "WHO, 2024", "OpenAI, n.d."). Do NOT use a generic label like "Source".
+- IMPORTANT: The H1 heading MUST be written in {language} language. If the topic text is in a different language, translate it. Do NOT mix languages in the heading.
+- IMPORTANT: The entire introduction MUST be written ONLY in {language} language (no mixed-language headings/phrases).
+{gap_instruction}{_citation_instruction_intro(report_format)}
 Assume that the current date is {datetime.now(timezone.utc).strftime('%B %d, %Y')} if required.
 - The output must be in {language} language.
 """
@@ -741,10 +786,8 @@ Assume that the current date is {datetime.now(timezone.utc).strftime('%B %d, %Y'
     5. Be approximately 2-3 paragraphs long
 
     If there is no "## Conclusion" section title written at the end of the report, please add it to the top of your conclusion.
-    You must use in-text citations in {report_format.upper()} format as markdown hyperlinks.
-
-    Use in-text citations ONLY in this canonical form: **([Author, Year](url))**.
-    The link label MUST be an author-year style label (e.g. "Smith, 2023", "WHO, 2024", "OpenAI, n.d."). Do NOT use a generic label like "Source".
+    {_citation_instruction_conclusion(report_format)}
+    IMPORTANT: The entire conclusion MUST be written ONLY in {language} language (no mixed-language headings/phrases).
 
     IMPORTANT: The entire conclusion MUST be written in {language} language.
 

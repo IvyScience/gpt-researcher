@@ -2,6 +2,7 @@ import json
 import os
 from typing import Dict, List, Any
 import time
+import asyncio
 import logging
 import sys
 import warnings
@@ -433,23 +434,60 @@ async def send_webhook_notification(
         if webhook_host_header:
             headers["Host"] = webhook_host_header
 
+        # Retry strategy: some receivers may return transient 404 during eventual consistency/race conditions :-)
+        retry_on_404 = _env_bool("WEBHOOK_RETRY_ON_404", True)
+        max_attempts = int(os.getenv("WEBHOOK_RETRY_MAX_ATTEMPTS", "4"))
+        base_delay = float(os.getenv("WEBHOOK_RETRY_BASE_DELAY_SECONDS", "0.6"))
+
         async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
-            result = await client.post(webhook_url, json=payload, headers=headers)
-            try:
-                result.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                # Log receiver response body for fast debugging (especially on 400)
+            last_exc: Exception | None = None
+            for attempt in range(1, max(1, max_attempts) + 1):
+                result = await client.post(webhook_url, json=payload, headers=headers)
+                if 200 <= result.status_code < 300:
+                    logger.info(
+                        "Webhook notification sent to %s for research_id: %s",
+                        webhook_url, research_id,
+                    )
+                    return
+
                 resp_text = ""
                 try:
-                    resp_text = e.response.text
+                    resp_text = result.text
                 except Exception:
                     resp_text = "<unable to read response body>"
-                logger.error(
-                    f"Webhook receiver returned {e.response.status_code} for research_id={research_id}. "
-                    f"Response body: {resp_text}"
+
+                # Only retry on 404 when receiver explicitly says "Research report not found"
+                is_not_found_report = (
+                    result.status_code == 404
+                    and ("Research report not found" in resp_text or "report not found" in resp_text.lower())
                 )
-                raise
-            logger.info(f"Webhook notification sent successfully to {webhook_url} for research_id: {research_id}")
+                should_retry = retry_on_404 and is_not_found_report and attempt < max_attempts
+
+                logger.error(
+                    f"Webhook receiver returned {result.status_code} for research_id={research_id} "
+                    f"(attempt {attempt}/{max_attempts}). Response body: {resp_text}"
+                )
+
+                if should_retry:
+                    # Exponential-ish backoff (bounded) to give receiver time to materialize the report record.
+                    delay = min(5.0, base_delay * (2 ** (attempt - 1)))
+                    await asyncio.sleep(delay)
+                    continue
+
+                # Non-retriable or out of attempts -> raise
+                try:
+                    result.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    last_exc = e
+                break
+
+            if last_exc:
+                raise last_exc
+            raise httpx.HTTPStatusError(
+                f"Webhook request failed for research_id={research_id}",
+                request=None,
+                response=result,
+            )
     except Exception as e:
         logger.error(f"Failed to send webhook notification to {webhook_url}: {e}")
 

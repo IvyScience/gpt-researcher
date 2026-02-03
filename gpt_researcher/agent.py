@@ -5,7 +5,6 @@ import os
 from .config import Config
 from .memory import Memory
 from .utils.enum import ReportSource, ReportType, Tone
-from .llm_provider import GenericLLMProvider
 from .prompts import get_prompt_family
 from .vector_store import VectorStoreWrapper
 
@@ -63,7 +62,7 @@ class GPTResearcher:
     ):
         """
         Initialize a GPT Researcher instance.
-        
+
         Args:
             query (str): The research query or question.
             report_type (str): Type of report to generate.
@@ -100,7 +99,7 @@ class GPTResearcher:
                 - connection_url (str): URL for WebSocket or HTTP connection
                 - connection_type (str): Connection type (stdio, websocket, http)
                 - connection_token (str): Authentication token for remote connections
-                
+
                 Example:
                 ```python
                 mcp_configs=[{
@@ -111,7 +110,7 @@ class GPTResearcher:
                 ```
             mcp_strategy (str, optional): MCP execution strategy. Options:
                 - "fast" (default): Run MCP once with original query for best performance
-                - "deep": Run MCP for all sub-queries for maximum thoroughness  
+                - "deep": Run MCP for all sub-queries for maximum thoroughness
                 - "disabled": Skip MCP entirely, use only web retrievers
         """
         self.kwargs = kwargs
@@ -137,16 +136,31 @@ class GPTResearcher:
         self.role = role
         self.parent_query = parent_query
         self.subtopics = subtopics or []
-        self.visited_urls = visited_urls or set()
+        # IMPORTANT: always copy visited_urls to avoid cross-task mutation. :-)
+        self.visited_urls = set(visited_urls) if visited_urls else set()
         self.verbose = verbose
         self.context = context or []
         self.headers = headers or {}
-        
+
         # Overwrite config attributes from headers if they exist
         # This allows per-request configuration (e.g. LANGUAGE, REPORT_FORMAT)
         for key, value in self.headers.items():
             if hasattr(self.cfg, key.lower()):
                 setattr(self.cfg, key.lower(), value)
+
+        # If caller didn't explicitly set LANGUAGE and the query is predominantly Chinese,
+        # default output language to Chinese to avoid mixed-language reports. :-)
+        try:
+            header_keys = {str(k).lower() for k in (self.headers or {}).keys()}
+            language_explicit = "language" in header_keys
+            if (not language_explicit) and (str(getattr(self.cfg, "language", "")).lower() == "english"):
+                q = str(self.query or "")
+                cjk = sum(1 for ch in q if "\u4e00" <= ch <= "\u9fff")
+                latin = sum(1 for ch in q if ("a" <= ch.lower() <= "z"))
+                if cjk >= 8 and cjk >= latin:
+                    self.cfg.language = "chinese"
+        except Exception:
+            pass
 
         self.research_costs = 0.0
         # Token usage tracking
@@ -157,17 +171,17 @@ class GPTResearcher:
         }
         self.log_handler = log_handler
         self.prompt_family = get_prompt_family(prompt_family or self.cfg.prompt_family, self.cfg)
-        
+
         # Process MCP configurations if provided
         self.mcp_configs = mcp_configs
         if mcp_configs:
             self._process_mcp_configs(mcp_configs)
-        
+
         self.retrievers = get_retrievers(self.headers, self.cfg)
         self.memory = Memory(
             self.cfg.embedding_provider, self.cfg.embedding_model, **self.cfg.embedding_kwargs
         )
-        
+
         # Set default encoding to utf-8
         self.encoding = kwargs.get('encoding', 'utf-8')
         self.kwargs.pop('encoding', None)  # Remove encoding from kwargs to avoid passing it to LLM calls
@@ -188,17 +202,17 @@ class GPTResearcher:
     def _resolve_mcp_strategy(self, mcp_strategy: str | None, mcp_max_iterations: int | None) -> str:
         """
         Resolve MCP strategy from various sources with backwards compatibility.
-        
+
         Priority:
         1. Parameter mcp_strategy (new approach)
-        2. Parameter mcp_max_iterations (backwards compatibility)  
+        2. Parameter mcp_max_iterations (backwards compatibility)
         3. Config MCP_STRATEGY
         4. Default "fast"
-        
+
         Args:
             mcp_strategy: New strategy parameter
             mcp_max_iterations: Legacy parameter for backwards compatibility
-            
+
         Returns:
             str: Resolved strategy ("fast", "deep", or "disabled")
         """
@@ -220,12 +234,12 @@ class GPTResearcher:
                 import logging
                 logging.getLogger(__name__).warning(f"Invalid mcp_strategy '{mcp_strategy}', defaulting to 'fast'")
                 return "fast"
-        
+
         # Priority 2: Convert mcp_max_iterations for backwards compatibility
         if mcp_max_iterations is not None:
             import logging
             logging.getLogger(__name__).warning("mcp_max_iterations is deprecated, use mcp_strategy instead")
-            
+
             if mcp_max_iterations == 0:
                 return "disabled"
             elif mcp_max_iterations == 1:
@@ -235,7 +249,7 @@ class GPTResearcher:
             else:
                 # Treat any other number as fast mode
                 return "fast"
-        
+
         # Priority 3: Use config setting
         if hasattr(self.cfg, 'mcp_strategy'):
             config_strategy = self.cfg.mcp_strategy
@@ -247,28 +261,29 @@ class GPTResearcher:
                 return "fast"
             elif config_strategy == "comprehensive":
                 return "deep"
-            
+
         # Priority 4: Default to fast
         return "fast"
 
     def _process_mcp_configs(self, mcp_configs: list[dict]) -> None:
         """
         Process MCP configurations from a list of configuration dictionaries.
-        
+
         This method validates the MCP configurations. It only adds MCP to retrievers
         if no explicit retriever configuration is provided via environment variables.
-        
+
         Args:
             mcp_configs (list[dict]): List of MCP server configuration dictionaries.
         """
         # Check if user explicitly set RETRIEVER environment variable
         user_set_retriever = os.getenv("RETRIEVER") is not None
-        
+
         if not user_set_retriever:
             # Only auto-add MCP if user hasn't explicitly set retrievers
             if hasattr(self.cfg, 'retrievers') and self.cfg.retrievers:
                 # If retrievers is set in config (but not via env var)
-                current_retrievers = set(self.cfg.retrievers.split(",")) if isinstance(self.cfg.retrievers, str) else set(self.cfg.retrievers)
+                r = self.cfg.retrievers
+                current_retrievers = set(r.split(",")) if isinstance(r, str) else set(r)
                 if "mcp" not in current_retrievers:
                     current_retrievers.add("mcp")
                     self.cfg.retrievers = ",".join(filter(None, current_retrievers))
@@ -276,7 +291,7 @@ class GPTResearcher:
                 # No retrievers configured, use mcp as default
                 self.cfg.retrievers = "mcp"
         # If user explicitly set RETRIEVER, respect their choice and don't auto-add MCP
-        
+
         # Store the mcp_configs for use by the MCP retriever
         self.mcp_configs = mcp_configs
 
@@ -383,7 +398,13 @@ class GPTResearcher:
         # Return the research context
         return self.context
 
-    async def write_report(self, existing_headers: list = [], relevant_written_contents: list = [], ext_context=None, custom_prompt="") -> str:
+    async def write_report(
+        self,
+        existing_headers: list = [],
+        relevant_written_contents: list = [],
+        ext_context=None,
+        custom_prompt="",
+    ) -> str:
         await self._log_event("research", step="writing_report", details={
             "existing_headers": existing_headers,
             "context_source": "external" if ext_context else "internal"
@@ -516,7 +537,7 @@ class GPTResearcher:
                 "cost": cost,
                 "total_cost": self.research_costs
             })
-            
+
         # Check for token usage in kwargs to update metrics without relying on reflection
         if "token_usage" in kwargs:
             usage = kwargs["token_usage"]
@@ -525,4 +546,3 @@ class GPTResearcher:
                     prompt_tokens=usage.get("prompt_tokens", 0),
                     completion_tokens=usage.get("completion_tokens", 0)
                 )
-
