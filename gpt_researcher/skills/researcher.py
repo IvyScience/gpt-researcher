@@ -3,7 +3,12 @@ import random
 import logging
 import os
 from ..actions.utils import stream_output
-from ..actions.query_processing import plan_research_outline, get_search_results
+from ..actions.query_processing import (
+    plan_research_outline,
+    get_search_results,
+    normalize_user_query,
+    InvalidQueryError,
+)
 from ..document import DocumentLoader, OnlineDocumentLoader, LangChainDocumentLoader
 from ..utils.enum import ReportSource
 from ..utils.logging_config import get_json_handler
@@ -282,12 +287,45 @@ class ResearchConductor:
         Returns:
             context: List of context
         """
-        self.logger.info(f"Starting web search for query: {query}")
-
         if scraped_data is None:
             scraped_data = []
         if query_domains is None:
             query_domains = []
+
+        # Step 0: Normalize user query (Smart LLM): keep if clear/short, else main topic
+        # + sub_queries; invalid -> raise :-)
+        normalizer_result = await normalize_user_query(
+            query,
+            cfg=self.researcher.cfg,
+            cost_callback=self.researcher.add_costs,
+            prompt_family=getattr(self.researcher, "prompt_family", None),
+            language=getattr(self.researcher.cfg, "language", "english") or "english",
+            websocket=self.researcher.websocket,
+            **self.researcher.kwargs
+        )
+        effective_query = (normalizer_result.get("query") or "").strip()
+        precomputed_sub_queries = normalizer_result.get("sub_queries") or []
+
+        if not effective_query:
+            self.logger.warning("Query normalizer returned empty topic (invalid query), terminating.")
+            if self.researcher.verbose:
+                await stream_output(
+                    "logs",
+                    "query_invalid",
+                    "❌ 无法识别有效的研究主题，请提供明确的研究问题或主题。",
+                    self.researcher.websocket,
+                )
+            error_callback = getattr(self.researcher, "error_callback", None)
+            if callable(error_callback):
+                try:
+                    error_callback("invalid_query", "Query has no researchable topic.")
+                except Exception as e:
+                    self.logger.warning(f"Error callback raised: {e}")
+            raise InvalidQueryError("Query has no researchable topic.")
+
+        self.researcher.query = effective_query
+        query = effective_query
+        self.logger.info(f"Starting web search for query: {query}")
 
         # **CONFIGURABLE MCP OPTIMIZATION: Control MCP strategy**
         mcp_retrievers = [r for r in self.researcher.retrievers if "mcpretriever" in r.__name__.lower()]
@@ -339,13 +377,15 @@ class ResearchConductor:
                 self._mcp_results_cache = mcp_context
                 self.logger.info(f"MCP results cached: {len(mcp_context)} total context entries")
 
-        # Generate Sub-Queries including original query
+        # Always plan_research first (initial search + LLM) to avoid unclear user input;
+        # then merge normalizer sub_queries if any :-)
         sub_queries = await self.plan_research(query, query_domains)
         self.logger.info(f"Generated sub-queries: {sub_queries}")
-
-        # If this is not part of a sub researcher, add original query to research for better results
         if self.researcher.report_type != "subtopic_report":
             sub_queries.append(query)
+        if precomputed_sub_queries:
+            sub_queries += list(precomputed_sub_queries)
+            self.logger.info(f"Merged normalizer sub-queries: {sub_queries}")
 
         if self.researcher.verbose:
             await stream_output(

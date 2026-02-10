@@ -32,6 +32,7 @@ from server.server_utils import CustomLogsHandler
 from server.websocket_manager import run_agent
 from utils import write_md_to_word, write_md_to_pdf, write_text_to_md
 from gpt_researcher.utils.enum import Tone
+from gpt_researcher.actions.query_processing import InvalidQueryError
 from chat.chat import ChatAgentWithMemory
 
 # Output file controls
@@ -303,6 +304,14 @@ async def write_report(research_request: ResearchRequest, research_id: str = Non
         )
 
         return response
+    except InvalidQueryError as e:
+        # Invalid query (no researchable topic): notify via webhook and return 400-style error :-)
+        await send_webhook_notification(
+            research_id=research_id,
+            status="failed",
+            error=f"invalid_query: {e}"
+        )
+        raise HTTPException(status_code=400, detail={"code": "invalid_query", "message": str(e)})
     except Exception as e:
         # Send error webhook (if configured in environment)
         await send_webhook_notification(

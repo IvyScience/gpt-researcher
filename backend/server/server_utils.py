@@ -117,22 +117,39 @@ class Researcher:
         }
 
 
+# Max basename length in bytes (Linux NAME_MAX=255; keep margin for .json, etc.)
+MAX_BASENAME_BYTES = 200
+
+
 def sanitize_filename(filename: str) -> str:
-    # Split into components
-    prefix, timestamp, *task_parts = filename.split('_')
-    task = '_'.join(task_parts)
+    # Split into components: task_<timestamp>_<task>
+    parts = filename.split("_", 2)  # max 3 parts
+    if len(parts) < 3:
+        prefix = "task"
+        timestamp = str(int(time.time()))
+        task = filename
+    else:
+        prefix, timestamp, task = parts
 
-    # Calculate max length for task portion
-    # 255 - len(os.getcwd()) - len("\\gpt-researcher\\outputs\\") - len("task_") - len(timestamp)
-    # - len("_.json") - margin
-    max_task_length = 255 - len(os.getcwd()) - 24 - 5 - 10 - 6 - 5  # ~189 chars for task
-
-    # Truncate task if needed
-    truncated_task = task[:max_task_length] if len(task) > max_task_length else task
-
-    # Reassemble and clean the filename
-    sanitized = f"{prefix}_{timestamp}_{truncated_task}"
-    return re.sub(r"[^\w\s-]", "", sanitized).strip()
+    # Clean task: keep only word chars, spaces, hyphens
+    task = re.sub(r"[^\w\s\-]", "", task).strip()
+    # Truncate so that full basename fits in MAX_BASENAME_BYTES (UTF-8 bytes; avoids "file name too long")
+    basename = f"{prefix}_{timestamp}_{task}"
+    encoded = basename.encode("utf-8")
+    if len(encoded) > MAX_BASENAME_BYTES:
+        # Truncate task portion by bytes
+        prefix_ts = f"{prefix}_{timestamp}_"
+        head_bytes = len(prefix_ts.encode("utf-8"))
+        tail_max = MAX_BASENAME_BYTES - head_bytes
+        if tail_max <= 0:
+            return f"{prefix}_{timestamp}_"
+        task_encoded = task.encode("utf-8")
+        if len(task_encoded) <= tail_max:
+            truncated_task = task
+        else:
+            truncated_task = task_encoded[:tail_max].decode("utf-8", errors="ignore").rstrip()
+        basename = prefix_ts + truncated_task
+    return basename
 
 
 async def handle_start_command(websocket, data: str, manager):

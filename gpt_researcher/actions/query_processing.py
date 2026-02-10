@@ -9,7 +9,69 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-async def get_search_results(query: str, retriever: Any, query_domains: List[str] = None, researcher=None) -> List[Dict[str, Any]]:
+
+class InvalidQueryError(Exception):
+    """Raised when the user query has no researchable topic (LLM normalizer returns empty query). :-)"""
+    pass
+
+
+async def normalize_user_query(
+    raw_query: str,
+    cfg: Config,
+    cost_callback: callable = None,
+    prompt_family: type[PromptFamily] | PromptFamily = None,
+    language: str = "english",
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Use Smart LLM to normalize the user query: keep if clear/short, else return main topic + sub_queries.
+    Returns {"query": str, "sub_queries": List[str]}. If invalid, query is "".
+    """
+    if prompt_family is None:
+        prompt_family = PromptFamily(cfg)
+    prompt = prompt_family.generate_query_normalizer_prompt(raw_query, language=language or "english")
+    try:
+        response = await create_chat_completion(
+            model=cfg.smart_llm_model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=cfg.smart_token_limit,
+            llm_provider=cfg.smart_llm_provider,
+            llm_kwargs=cfg.llm_kwargs or {},
+            cost_callback=cost_callback,
+            **kwargs
+        )
+    except Exception as e:
+        logger.warning(f"Query normalizer LLM call failed: {e}, treating as keep original.")
+        return {"query": raw_query.strip(), "sub_queries": []}
+    text = (response or "").strip()
+    if not text:
+        return {"query": raw_query.strip(), "sub_queries": []}
+    try:
+        out = json_repair.loads(text)
+    except Exception:
+        logger.warning("Query normalizer returned invalid JSON, treating as keep original.")
+        return {"query": raw_query.strip(), "sub_queries": []}
+    if not isinstance(out, dict):
+        return {"query": raw_query.strip(), "sub_queries": []}
+    query = out.get("query")
+    sub_queries = out.get("sub_queries")
+    if query is None:
+        query = raw_query.strip()
+    else:
+        query = str(query).strip()
+    if not isinstance(sub_queries, list):
+        sub_queries = []
+    sub_queries = [str(q).strip() for q in sub_queries if str(q).strip()]
+    return {"query": query, "sub_queries": sub_queries}
+
+
+async def get_search_results(
+    query: str,
+    retriever: Any,
+    query_domains: List[str] = None,
+    researcher=None,
+) -> List[Dict[str, Any]]:
     """
     Get web search results for a given query.
 
@@ -39,8 +101,9 @@ async def get_search_results(query: str, retriever: Any, query_domains: List[str
         init_kwargs.pop("headers", None)
         init_kwargs.pop("researcher", None)
         search_retriever = retriever(query, **init_kwargs)
-    
+
     return search_retriever.search()
+
 
 async def generate_sub_queries(
     query: str,
@@ -89,7 +152,7 @@ async def generate_sub_queries(
         )
     except Exception as e:
         logger.warning(f"Error with strategic LLM: {e}. Retrying with max_tokens={cfg.strategic_token_limit}.")
-        logger.warning(f"See https://github.com/assafelovic/gpt-researcher/issues/1022")
+        logger.warning("See https://github.com/assafelovic/gpt-researcher/issues/1022")
         try:
             response = await create_chat_completion(
                 model=cfg.strategic_llm_model,
@@ -100,7 +163,7 @@ async def generate_sub_queries(
                 cost_callback=cost_callback,
                 **kwargs
             )
-            logger.warning(f"Retrying with max_tokens={cfg.strategic_token_limit} successful.")
+            logger.warning("Retrying with max_tokens=%s successful.", cfg.strategic_token_limit)
         except Exception as e:
             logger.warning(f"Retrying with max_tokens={cfg.strategic_token_limit} failed.")
             logger.warning(f"Error with strategic LLM: {e}. Falling back to smart LLM.")
@@ -116,6 +179,7 @@ async def generate_sub_queries(
             )
 
     return json_repair.loads(response)
+
 
 async def plan_research_outline(
     query: str,
@@ -147,13 +211,15 @@ async def plan_research_outline(
     # Handle the case where retriever_names is not provided
     if retriever_names is None:
         retriever_names = []
-    
+
     # For MCP retrievers, we may want to skip sub-query generation
     # Check if MCP is the only retriever or one of multiple retrievers
     if retriever_names and ("mcp" in retriever_names or "MCPRetriever" in retriever_names):
-        mcp_only = (len(retriever_names) == 1 and 
-                   ("mcp" in retriever_names or "MCPRetriever" in retriever_names))
-        
+        mcp_only = (
+            len(retriever_names) == 1
+            and ("mcp" in retriever_names or "MCPRetriever" in retriever_names)
+        )
+
         if mcp_only:
             # If MCP is the only retriever, skip sub-query generation
             logger.info("Using MCP retriever only - skipping sub-query generation")
