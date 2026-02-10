@@ -163,6 +163,30 @@ AVAILABLE TOOLS: {tool_names}
 Please conduct thorough research and provide your findings. Use the tools strategically to gather the most relevant and comprehensive information."""
 
     @staticmethod
+    def generate_query_normalizer_prompt(user_query: str, language: str = "english") -> str:
+        """Prompt for normalizing user query: judge clarity/length and return main topic + optional sub_queries.
+        Returns JSON: {"query": "main topic or original", "sub_queries": ["q1", "q2", ...]}.
+        If invalid (no topic), query must be empty string. :-)"""
+        lang_instruction = "Respond in the same language as the user query." if language != "english" else ""
+        return f"""You are a research query analyst. Your task is to judge the user's input and return a JSON object.
+
+Rules:
+1. If the query is semantically clear AND short enough for search (e.g. under 350 characters), keep it as is: return {{"query": "<user query unchanged>", "sub_queries": []}}.
+2. If the query is unclear, too long, or is a long paragraph/essay, extract:
+   - "query": a concise main topic or title (e.g. project name, topic phrase) to use as the primary research topic for the report. Use this to replace the user input in subsequent steps.
+   - "sub_queries": a list of 3-6 focused search queries (short, under 100 chars each) that cover the user's intent. These will be used to gather context.
+   Return {{"query": "<main topic>", "sub_queries": ["query1", "query2", ...]}}.
+3. If the input has no researchable topic (e.g. empty, pure greeting, or meaningless), return {{"query": "", "sub_queries": []}} to signal an invalid query.
+
+User input:
+---
+{user_query}
+---
+
+{lang_instruction}
+Respond with ONLY a single JSON object, no markdown, no explanation. Keys must be "query" (string) and "sub_queries" (list of strings)."""
+
+    @staticmethod
     def generate_search_queries_prompt(
         question: str,
         parent_query: str,
